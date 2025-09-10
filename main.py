@@ -1,23 +1,19 @@
-"""
-Main entry point for the RC car simulation.
-Run this file to start the simulation with manual control.
-"""
-
 import pygame
 import sys
 import argparse
-from simulation.environment import RCCarEnvironment
-from control.manual_control import ManualController
+from simulation.environment import Environment
+from controllers.manual_controller import ManualController
 
-def build_env(map_index: int) -> RCCarEnvironment:
+def build_env(map_index: int) -> Environment:
     start_map = f"maps/map_start{map_index}.png"
     display_map = f"maps/map{map_index}.png"
-    return RCCarEnvironment(
+    return Environment(
         map_path=start_map,
         display_map_path=display_map,
-        show_collision_box=True,  # Toggle collision box visibility
-        show_sensors=True,        # Toggle sensor ray visibility
-        show_racing_line=True     # Toggle racing line visibility
+        show_collision_box=True,  # collision box visibility
+        show_sensors=True,        # sensor ray visibility
+        show_racing_line=True,    # racing line visibility
+        show_track_edges=False    # track boundary edges visibility
     )
 
 def parse_args():
@@ -26,32 +22,24 @@ def parse_args():
     return parser.parse_args()
 
 def main():
-    # Initialize pygame
     pygame.init()
 
     args = parse_args()
     current_map = 5
 
-    # Create the environment for the selected map
+    # create the environment
     env = build_env(current_map)
     
-    # Create manual controller
+    # manual controller
     controller = ManualController()
     
-    # Main game loop
+    # main game loop
     clock = pygame.time.Clock()
     running = True
     
-    print("Manual Control:")
-    print("W/S - Forward/Backward")
-    print("A/D - Turn Left/Right")
-    print("Arrow Keys - Direct wheel control")
-    print("R - Reset car position")
-    print("1-9 - Switch map set (mapN/map_startN)")
-    print("ESC - Exit")
-    
     while running:
         dt = clock.tick(60) / 1000.0  # 60 FPS, convert to seconds
+        fps = clock.get_fps()
         
         # Handle events
         for event in pygame.event.get():
@@ -62,6 +50,9 @@ def main():
                     running = False
                 elif event.key == pygame.K_r:
                     env.reset()
+                elif event.key == pygame.K_t:
+                    env.show_track_edges = not env.show_track_edges
+                    print(f"Track edges: {'ON' if env.show_track_edges else 'OFF'}")
                 elif event.key in [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4, pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8, pygame.K_9]:
                     # Switch map on number key
                     key_to_num = {
@@ -75,20 +66,24 @@ def main():
                         env = build_env(current_map)
                         print(f"Switched to map {current_map}")
         
-        # Get control input
-        action = controller.get_action()
+        # control input
+        observation = env.get_observation()
+        action = controller.act(observation)
         
-        # Step the environment
+        # step
         observation, reward, done, info = env.step(action)
         
-        # Reset if episode is done
+        # reset if episode is done
         if done:
             env.reset()
         
-        # Render the environment
         env.render()
+        # Draw FPS on top of everything
+        if hasattr(env, 'screen'):
+            font = pygame.font.Font(None, 24)
+            fps_text = font.render(f"FPS: {fps:.1f}", True, (255, 255, 0))
+            env.screen.blit(fps_text, (10, 10))
         
-        # Update display
         pygame.display.flip()
     
     pygame.quit()

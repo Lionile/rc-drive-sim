@@ -13,7 +13,7 @@ def downsample_path(path, num_points=30):
     
     return downsampled_path
 
-def extract_and_scale_contours(image_path, scale=0.7, epsilon_factor=0.01):
+def extract_and_scale_contours(image_path, scale=0.7, epsilon_factor=0.001, plot=False):
     """
     Extracts the first contour from an image, simplifies it using the RDP algorithm,
     and scales it by the specified factor.
@@ -68,14 +68,16 @@ def extract_and_scale_contours(image_path, scale=0.7, epsilon_factor=0.01):
     start_points = find_green_circle_center(image_path)
     headings = [3.14, 0, -1.57 ]
 
-    # # Visualize the contours
-    # cv2.drawContours(image, [simplified_contour_first], -1, (0, 255, 0), 2)
-    # cv2.drawContours(image, [first_contour], -1, (0, 0, 255), 2)
-    # cv2.drawContours(image, [simplified_contour_second], -1, (255, 0, 0), 2)
-    #
-    # cv2.imshow('Contours', image)
-    # cv2.waitKey(0)  # Wait for a key press to close
-    # cv2.destroyAllWindows()
+    if plot:
+        # Visualize the contours
+        cv2.drawContours(image, [simplified_contour_first], -1, (0, 255, 0), 2)
+        cv2.drawContours(image, [first_contour], -1, (0, 0, 255), 2)
+        cv2.drawContours(image, [simplified_contour_second], -1, (255, 0, 0), 2)
+        cv2.drawContours(image, [second_contour], -1, (255, 255, 0), 2)
+        
+        cv2.imshow('Contours', image)
+        cv2.waitKey(0)  # Wait for a key press to close
+        cv2.destroyAllWindows()
 
     return simplified_contour_points_first, simplified_contour_points_second, start_points, headings
 
