@@ -119,24 +119,24 @@ class Environment:
         
         return observation
     
-    def step(self, action):
+    def step(self, action, dt=1.0/60.0):
         """
         Take a step in the environment.
         
         Args:
             action: [left_wheel_velocity, right_wheel_velocity] both in range [-1, 1]
+            dt: Time delta for physics update (default: 1/60 seconds)
             
         Returns:
             observation: Current sensor readings
             reward: Reward for this step
-            done: Whether episode is finished
+            terminated: Whether episode ended due to collision/failure
+            truncated: Whether episode ended due to time limit
             info: Additional information
         """
         # apply action to car
         left_vel, right_vel = action
         self.car.set_wheel_velocities(left_vel, right_vel)
-        
-        dt = 1.0 / 60.0
         self.car.update(dt)
         
         observation = self.get_observation()
@@ -144,18 +144,20 @@ class Environment:
         
         reward = self.calculate_reward(collision)
         
-        # check if episode is done
+        # check episode termination conditions
         self.current_step += 1
-        done = collision or self.current_step >= self.max_steps
+        terminated = collision  # Episode ends due to collision/failure
+        truncated = self.current_step >= self.max_steps  # Episode ends due to time limit
         
         info = {
             'collision': collision,
             'position': self.car.get_position(),
             'heading': self.car.get_heading(),
-            'step': self.current_step
+            'step': self.current_step,
+            'max_steps': self.max_steps
         }
         
-        return observation, reward, done, info
+        return observation, reward, terminated, truncated, info
     
     def get_observation(self):
         """Get current observation (sensor readings)."""
@@ -270,7 +272,3 @@ class Environment:
         for i, line in enumerate(info_lines):
             text = font.render(line, True, (255, 255, 255))
             self.screen.blit(text, (10, 10 + i * 25))
-    
-    def close(self):
-        """Close the environment."""
-        pygame.quit()

@@ -16,12 +16,13 @@ class PPOController(BaseController):
         if model_path:
             self.load_model(model_path)
     
-    def act(self, observation):
+    def act(self, observation, dt=1.0/60.0):
         """
         Get action from PPO policy.
         
         Args:
             observation: Current sensor readings as numpy array
+            dt: Time delta for physics update (not used by PPO)
             
         Returns:
             [left_wheel_velocity, right_wheel_velocity] in range [-1, 1]

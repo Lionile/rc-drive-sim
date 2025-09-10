@@ -7,4 +7,3 @@
 - remove close function from environment, main code should be the one closing
 - in env step, add distinction between episode termination and truncation (time limit hit)
 - make the side sensor rays start form the actual sensors, not the middle (move them about 1.5 cm forward in the direction of each respective ray)
-- make all of the occurences of the update frequency (60Hz) be controlled by the main code, so I dont forget to change the frequency in one place.

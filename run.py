@@ -201,13 +201,20 @@ def main():
         
         # Get control input
         observation = env.get_observation()
-        action = controller.act(observation)
+        action = controller.act(observation, dt)
         
         # Step environment
-        observation, reward, done, info = env.step(action)
+        observation, reward, terminated, truncated, info = env.step(action, dt)
         
-        # Reset if episode is done
-        if done:
+        # Reset if episode is done (either terminated or truncated)
+        if terminated or truncated:
+            # Print episode end reason for debugging
+            if terminated:
+                reason = "collision" if info.get('collision', False) else "terminated"
+                print(f"Episode ended: {reason} (step {info.get('step', 0)})")
+            elif truncated:
+                print(f"Episode truncated: time limit reached ({info.get('max_steps', 0)} steps)")
+            
             env.reset()
             controller.reset()
         

@@ -11,12 +11,13 @@ class RandomController(BaseController):
         super().__init__()
         self.rng = np.random.default_rng(seed)
         
-    def act(self, observation):
+    def act(self, observation, dt=1.0/60.0):
         """
         Generate random actions.
         
         Args:
             observation: Current sensor readings (not used)
+            dt: Time delta for physics update (not used for random actions)
             
         Returns:
             [left_wheel_velocity, right_wheel_velocity] in range [-1, 1]

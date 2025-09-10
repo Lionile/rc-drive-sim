@@ -22,14 +22,16 @@ class ManualController:
         self.turn_rate = 2.0     # How fast the car turns
         self.decay_rate = 5.0    # How fast velocities decay when no input
         
-    def get_action(self):
+    def get_action(self, dt=1.0/60.0):
         """
         Get control action based on keyboard input.
+        
+        Args:
+            dt: Time delta for physics update (default: 1/60 seconds)
         
         Returns:
             [left_wheel_velocity, right_wheel_velocity] in range [-1, 1]
         """
-        dt = 1.0 / 60.0  # 60 FPS
         
         keys = pygame.key.get_pressed()
         

@@ -18,12 +18,13 @@ class BaseController(ABC):
         pass
     
     @abstractmethod
-    def act(self, observation):
+    def act(self, observation, dt=1.0/60.0):
         """
         Get action from observation.
         
         Args:
             observation: Current sensor readings/state (numpy array or list)
+            dt: Time delta for physics update (default: 1/60 seconds)
             
         Returns:
             action: [left_wheel_velocity, right_wheel_velocity] in range [-1, 1]
