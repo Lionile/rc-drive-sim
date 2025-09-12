@@ -17,13 +17,14 @@ from controllers.manual_controller import ManualController
 from controllers.random_controller import RandomController
 from controllers.ppo_controller import PPOController
 from controllers.td3_controller import TD3Controller
+from controllers.pid_controller import PIDController
 
 def create_controller(controller_type, model_path=None, seed=None):
     """
     Factory function to create the appropriate controller.
     
     Args:
-        controller_type: Type of controller ('manual', 'random', 'ppo', 'td3')
+        controller_type: Type of controller ('manual', 'random', 'pid', 'ppo', 'td3')
         model_path: Path to trained model (for RL controllers)
         seed: Random seed (for random controller)
         
@@ -34,6 +35,8 @@ def create_controller(controller_type, model_path=None, seed=None):
         return ManualController()
     elif controller_type == 'random':
         return RandomController(seed=seed)
+    elif controller_type == 'pid':
+        return PIDController()
     elif controller_type == 'ppo':
         return PPOController(model_path=model_path)
     elif controller_type == 'td3':
@@ -70,7 +73,7 @@ def parse_args():
     
     # Controller selection
     parser.add_argument("--controller", "-c", type=str, default="manual",
-                        choices=["manual", "random", "ppo", "td3"],
+                        choices=["manual", "random", "pid", "ppo", "td3"],
                         help="Controller type to use")
     
     # Model path for RL controllers

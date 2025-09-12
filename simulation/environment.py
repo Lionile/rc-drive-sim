@@ -224,7 +224,9 @@ class Environment:
         # collision box
         if self.show_collision_box:
             corners = self.car.get_bounding_box()
-            pygame.draw.polygon(self.screen, (255, 0, 0), corners, 2)
+            # Convert float coordinates to integers for pygame
+            int_corners = [(int(x), int(y)) for x, y in corners]
+            pygame.draw.polygon(self.screen, (255, 0, 0), int_corners, 2)
         
         # sensors
         if self.show_sensors:
