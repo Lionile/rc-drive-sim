@@ -50,13 +50,13 @@ class ManualController(BaseController):
             self.left_wheel_vel -= self.acceleration * dt
             self.right_wheel_vel -= self.acceleration * dt
             
-        if keys[pygame.K_a]:  # Turn left (left wheel faster, right wheel slower)
-            self.left_wheel_vel += self.turn_rate * dt
-            self.right_wheel_vel -= self.turn_rate * dt
-            
-        if keys[pygame.K_d]:  # Turn right (left wheel slower, right wheel faster)
+        if keys[pygame.K_a]:  # Turn left (right wheel faster, left wheel slower)
             self.left_wheel_vel -= self.turn_rate * dt
             self.right_wheel_vel += self.turn_rate * dt
+            
+        if keys[pygame.K_d]:  # Turn right (left wheel faster, right wheel slower)
+            self.left_wheel_vel += self.turn_rate * dt
+            self.right_wheel_vel -= self.turn_rate * dt
         
         # Method 2: Arrow keys for direct wheel control
         if keys[pygame.K_UP]:  # Both wheels forward
@@ -67,13 +67,13 @@ class ManualController(BaseController):
             self.left_wheel_vel -= self.acceleration * dt
             self.right_wheel_vel -= self.acceleration * dt
             
-        if keys[pygame.K_LEFT]:  # Turn left (adjust differentially)
-            self.left_wheel_vel += self.turn_rate * dt
-            self.right_wheel_vel -= self.turn_rate * dt
-            
-        if keys[pygame.K_RIGHT]:  # Turn right (adjust differentially)
+        if keys[pygame.K_LEFT]:  # Turn left (right wheel faster, left wheel slower)
             self.left_wheel_vel -= self.turn_rate * dt
             self.right_wheel_vel += self.turn_rate * dt
+            
+        if keys[pygame.K_RIGHT]:  # Turn right (left wheel faster, right wheel slower)
+            self.left_wheel_vel += self.turn_rate * dt
+            self.right_wheel_vel -= self.turn_rate * dt
         
         # Clamp velocities to [-1, 1]
         self.left_wheel_vel = np.clip(self.left_wheel_vel, -1.0, 1.0)

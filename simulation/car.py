@@ -83,7 +83,7 @@ class DifferentialDriveCar:
         
         # Differential drive kinematics (unicycle approximation)
         v = (left_speed + right_speed) / 2.0
-        omega = (right_speed - left_speed) / self.wheelbase
+        omega = (left_speed - right_speed) / self.wheelbase
 
         # Screen coordinates have Y increasing downward. With y-down, decreasing
         # the heading rotates visually to the left; increasing rotates to the right.
