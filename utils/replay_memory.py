@@ -17,11 +17,11 @@ class ReplayMemory(object):
         transitions = random.sample(self.memory, batch_size)
         batch = Step(*zip(*transitions))
 
-        state_batch = torch.cat(batch.state)
-        action_batch = torch.cat(batch.action)
-        reward_batch = torch.cat(batch.reward)
-        next_state_batch = torch.cat(batch.next_state)
-        done_batch = torch.cat(batch.done)
+        state_batch = torch.stack(batch.state)
+        action_batch = torch.stack(batch.action)
+        reward_batch = torch.stack(batch.reward)
+        next_state_batch = torch.stack(batch.next_state)
+        done_batch = torch.stack(batch.done)
 
         return state_batch, action_batch, reward_batch, next_state_batch, done_batch
 

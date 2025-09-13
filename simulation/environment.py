@@ -6,6 +6,7 @@ Follows OpenAI Gym interface for easy RL integration.
 import pygame
 import numpy as np
 import math
+import os
 
 from utils.map_generator import extract_and_scale_contours, generate_racing_line
 from utils.geometry import segment_intersection, distance, contour_to_segments
@@ -37,6 +38,9 @@ class Environment:
         self.screen = pygame.display.set_mode(window_size)
         pygame.display.set_caption("RC Car Simulation")
         
+        # Cache font object to avoid recreating every frame
+        self.debug_font = pygame.font.Font(None, 24)
+        
         # map and track data
         self.map_path = map_path
         self.display_map_path = display_map_path
@@ -51,6 +55,13 @@ class Environment:
         # episode management
         self.max_steps = 3000
         self.current_step = 0
+        
+        # Cache for sensor readings to avoid multiple calculations per frame
+        self._sensor_cache = {
+            'readings': None,
+            'car_state': None,  # (x, y, heading) to track when cache is valid
+            'frame_step': -1    # which simulation step the cache is from
+        }
         
         self.reset()
     
@@ -114,6 +125,11 @@ class Environment:
         self.car.reset(start_x, start_y, start_heading)
         self.current_step = 0
         
+        # Invalidate sensor cache since car position changed
+        self._sensor_cache['readings'] = None
+        self._sensor_cache['car_state'] = None
+        self._sensor_cache['frame_step'] = -1
+        
         # initial observation
         observation = self.get_observation()
         
@@ -159,13 +175,31 @@ class Environment:
         
         return observation, reward, terminated, truncated, info
     
-    def get_observation(self):
-        """Get current observation (sensor readings)."""
+    def _get_cached_sensor_readings(self):
+        """Get sensor readings with caching to avoid redundant calculations."""
         car_x, car_y = self.car.get_position()
         car_heading = self.car.get_heading()
+        current_state = (car_x, car_y, car_heading)
         
+        # Check if cache is valid (same car state and same simulation step)
+        if (self._sensor_cache['car_state'] == current_state and 
+            self._sensor_cache['frame_step'] == self.current_step and
+            self._sensor_cache['readings'] is not None):
+            return self._sensor_cache['readings']
+        
+        # Cache is invalid, recalculate
         sensor_readings = self.sensors.get_readings(car_x, car_y, car_heading, self.boundary_segments)
         
+        # Update cache
+        self._sensor_cache['readings'] = sensor_readings
+        self._sensor_cache['car_state'] = current_state
+        self._sensor_cache['frame_step'] = self.current_step
+        
+        return sensor_readings
+    
+    def get_observation(self):
+        """Get current observation (sensor readings)."""
+        sensor_readings = self._get_cached_sensor_readings()
         return np.array(sensor_readings, dtype=np.float32)
     
     def check_collision(self):
@@ -232,7 +266,7 @@ class Environment:
         if self.show_sensors:
             car_x, car_y = self.car.get_position()
             car_heading = self.car.get_heading()
-            sensor_readings = self.sensors.get_readings(car_x, car_y, car_heading, self.boundary_segments)
+            sensor_readings = self._get_cached_sensor_readings()
             sensor_rays = self.sensors.get_sensor_rays(car_x, car_y, car_heading, sensor_readings)
             
             colors = [(0, 255, 0), (255, 255, 0), (0, 255, 255)]  # Green, Yellow, Cyan
@@ -254,7 +288,6 @@ class Environment:
     
     def draw_debug_info(self, fps=None):
         """Draw debug information on screen."""
-        font = pygame.font.Font(None, 24)
         
         # car info
         car_x, car_y = self.car.get_position()
@@ -267,10 +300,10 @@ class Environment:
             f"Step: {self.current_step}/{self.max_steps}"
         ]
         
-        # get sensor readings for display
-        sensor_readings = self.sensors.get_readings(car_x, car_y, self.car.get_heading(), self.track_boundaries)
+        # get sensor readings for display (use cached to avoid redundant computation)
+        sensor_readings = self._get_cached_sensor_readings()
         info_lines.append(f"Sensors: {[f'{r:.2f}' for r in sensor_readings]}")
         
         for i, line in enumerate(info_lines):
-            text = font.render(line, True, (255, 255, 255))
+            text = self.debug_font.render(line, True, (255, 255, 255))
             self.screen.blit(text, (10, 10 + i * 25))
