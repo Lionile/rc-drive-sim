@@ -1,0 +1,16 @@
+seed: 42
+episodes: 1000
+total_steps: null  # Alternative to episodes - use either episodes OR total_steps
+buffer_size: 100000
+batch_size: 256
+gamma: 0.99
+tau: 0.005
+actor_lr: 0.001
+critic_lr: 0.001
+noise_sigma: 0.2
+noise_clip: 0.5
+policy_delay: 2
+warmup_steps: 10000
+
+# Environment settings
+map: 1
