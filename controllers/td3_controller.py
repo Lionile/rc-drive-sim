@@ -89,12 +89,8 @@ class TD3Agent:
         """Get action from policy."""
         state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
         action = self.actor(state).cpu().data.numpy().flatten()
-        
-        if not deterministic and self.training_mode:
-            # Add exploration noise during training
-            noise = np.random.normal(0, 0.1, size=action.shape)
-            action = action + noise
-            
+        # NOTE: No exploration noise here. Exploration is handled in the Trainer
+        # to avoid double-noise and to keep inference behavior clean.
         return np.clip(action, -self.max_action, self.max_action)
     
     def train_mode(self, mode=True):
@@ -198,6 +194,9 @@ class TD3Trainer:
         
         # Metrics tracking
         self.metrics = []
+
+        # Periodic checkpointing
+        self.save_every_episodes = int(config.get('save_every_episodes', 0) or 0)
         
     def train(self):
         """Main training loop."""
@@ -233,6 +232,10 @@ class TD3Trainer:
                 print(f"Episode {self.episode_num}: Reward={episode_reward:.2f}, "
                       f"Steps={episode_steps}, Distance={episode_distance:.2f}, "
                       f"Avg Speed={avg_speed:.2f}")
+            
+            # Periodic checkpoint save
+            if self.save_every_episodes > 0 and (self.episode_num % self.save_every_episodes == 0):
+                self._save_checkpoint(self.episode_num)
         
         # Save final model and metrics
         self._save_final_model()
@@ -246,21 +249,24 @@ class TD3Trainer:
         episode_reward = 0
         episode_steps = 0
         episode_distance = 0
-        
         prev_pos = None
-        
+        epsilon = self.config.get('epsilon', 0.1)  # small probability of random action
+
         while True:
             # Get action
             if self.total_steps < self.warmup_steps:
                 # Random actions during warmup
                 action = np.random.uniform(-1, 1, 2)
             else:
-                # Use policy with exploration noise
-                action = self.agent.act(obs, deterministic=False)
-                # Add TD3 exploration noise
-                noise = np.random.normal(0, self.noise_sigma, size=action.shape)
-                noise = np.clip(noise, -self.noise_clip, self.noise_clip)
-                action = np.clip(action + noise, -1, 1)
+                # Epsilon-greedy: sometimes take a random action to encourage turning
+                if np.random.rand() < epsilon:
+                    action = np.random.uniform(-1, 1, 2)
+                else:
+                    # Policy action (deterministic), then add Gaussian exploration noise
+                    action = self.agent.act(obs, deterministic=True)
+                    noise = np.random.normal(0, self.noise_sigma, size=action.shape)
+                    noise = np.clip(noise, -self.noise_clip, self.noise_clip)
+                    action = np.clip(action + noise, -1, 1)
             
             # Step environment
             next_obs, reward, terminated, truncated, info = self.env.step(action, dt=1.0/60.0)
@@ -378,6 +384,12 @@ class TD3Trainer:
         model_path = self.save_dir / "final.pt"
         self.agent.save(model_path)
         print(f"✓ Final model saved to {model_path}")
+    
+    def _save_checkpoint(self, episode_num: int):
+        """Save a periodic checkpoint of the model."""
+        ckpt_path = self.save_dir / f"checkpoint_ep{episode_num}.pt"
+        self.agent.save(ckpt_path)
+        print(f"✓ Checkpoint saved at episode {episode_num} to {ckpt_path}")
     
     def _save_metrics(self):
         """Save training metrics to CSV."""

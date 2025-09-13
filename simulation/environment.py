@@ -56,6 +56,11 @@ class Environment:
         self.max_steps = 3000
         self.current_step = 0
         
+        # reward tracking
+        self.prev_position = None
+        self.prev_heading = None
+        self._last_dt = 1.0/60.0
+        
         # Cache for sensor readings to avoid multiple calculations per frame
         self._sensor_cache = {
             'readings': None,
@@ -98,15 +103,13 @@ class Environment:
         self.start_positions = start_points if start_points else [(512, 512)]
         self.start_headings = headings if headings else [0.0]
         
-        # generate racing line
-        if self.show_racing_line:
-            try:
-                racing_lines = generate_racing_line(self.map_path)
-                self.racing_lines = racing_lines
-            except Exception as e:
-                print(f"Could not generate racing line: {e}")
-                self.racing_lines = []
-        else:
+        # Always generate racing line at startup (regardless of show_racing_line flag)
+        # This avoids repeated expensive calculations when toggling visibility
+        try:
+            racing_lines = generate_racing_line(self.map_path)
+            self.racing_lines = racing_lines
+        except Exception as e:
+            print(f"Could not generate racing line: {e}")
             self.racing_lines = []
     
     def reset(self):
@@ -124,6 +127,10 @@ class Environment:
         
         self.car.reset(start_x, start_y, start_heading)
         self.current_step = 0
+        
+        # Initialize reward tracking
+        self.prev_position = self.car.get_position()
+        self.prev_heading = self.car.get_heading()
         
         # Invalidate sensor cache since car position changed
         self._sensor_cache['readings'] = None
@@ -153,6 +160,7 @@ class Environment:
         # apply action to car
         left_vel, right_vel = action
         self.car.set_wheel_velocities(left_vel, right_vel)
+        self._last_dt = dt
         self.car.update(dt)
         
         observation = self.get_observation()
@@ -233,9 +241,39 @@ class Environment:
         """Calculate reward for current step."""
         if collision:
             return -100.0
-        
-        # Simple reward: small positive for staying alive
-        return 1.0
+        # Signed forward progress: project displacement onto heading vector
+        current_pos = self.car.get_position()
+        if self.prev_position is not None:
+            dx = current_pos[0] - self.prev_position[0]
+            dy = current_pos[1] - self.prev_position[1]
+            heading = self.car.get_heading()
+            forward_progress = dx * math.cos(heading) + dy * math.sin(heading)
+        else:
+            forward_progress = 0.0
+
+        # Update previous position for next step
+        self.prev_position = current_pos
+
+        # Heading-change penalty: allow reasonable turn rate based on car dynamics.
+        # One-wheel-stationary yaw rate (rad/s): omega_allow = max_wheel_speed / wheelbase
+        # Allow per-step heading change: delta_allow = omega_allow * dt
+        current_heading = self.car.get_heading()
+        if self.prev_heading is not None:
+            dtheta = math.atan2(math.sin(current_heading - self.prev_heading),
+                                 math.cos(current_heading - self.prev_heading))
+            delta_allow = (self.car.max_wheel_speed / self.car.wheelbase) * self._last_dt
+            excess = max(0.0, abs(dtheta) - delta_allow)
+            # Convert excess rotation to an equivalent linear "wobble" distance at half wheelbase
+            # and scale with the same factor as forward progress to keep units comparable.
+            heading_penalty = 10.0 * (0.5 * self.car.wheelbase) * excess
+        else:
+            heading_penalty = 0.0
+
+        # Update previous heading for next step
+        self.prev_heading = current_heading
+
+        # Reward forward motion minus heading-change penalty
+        return 10.0 * forward_progress - heading_penalty
     
     def render(self):
         """Render the environment."""

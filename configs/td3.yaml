@@ -1,7 +1,7 @@
 seed: 42
 episodes: 1000
 total_steps: null  # Alternative to episodes - use either episodes OR total_steps
-buffer_size: 100000
+buffer_size: 50000
 batch_size: 256
 gamma: 0.99
 tau: 0.005
@@ -10,7 +10,8 @@ critic_lr: 0.001
 noise_sigma: 0.2
 noise_clip: 0.5
 policy_delay: 2
-warmup_steps: 10000
+warmup_steps: 1000
+save_every_episodes: 10  # Save a checkpoint every N episodes (0 to disable)
 
 # Environment settings
-map: 1
+map: 6
