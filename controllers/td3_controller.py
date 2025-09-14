@@ -19,68 +19,96 @@ from utils.geometry import distance
 
 # Neural Networks
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_action):
+    def __init__(self, state_dim, action_dim, max_action, hidden_sizes=None):
         super(Actor, self).__init__()
-        self.l1 = nn.Linear(state_dim, 64)
-        self.l2 = nn.Linear(64, 64)
-        self.l3 = nn.Linear(64, action_dim)
-        
+        if hidden_sizes is None:
+            hidden_sizes = [64, 64]
+
+        # Build MLP layers dynamically
+        layers = []
+        last_dim = state_dim
+        for h in hidden_sizes:
+            layers.append(nn.Linear(last_dim, h))
+            last_dim = h
+        self.hidden_layers = nn.ModuleList(layers)
+        self.out = nn.Linear(last_dim, action_dim)
+
         self.max_action = max_action
-        
+
     def forward(self, state):
-        a = F.relu(self.l1(state))
-        a = F.relu(self.l2(a))
-        return self.max_action * torch.tanh(self.l3(a))
+        a = state
+        for layer in self.hidden_layers:
+            a = F.relu(layer(a))
+        return self.max_action * torch.tanh(self.out(a))
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, hidden_sizes=None):
         super(Critic, self).__init__()
-        
+        if hidden_sizes is None:
+            hidden_sizes = [400, 300]
+
+        in_dim = state_dim + action_dim
+
         # Q1 architecture
-        self.l1 = nn.Linear(state_dim + action_dim, 400)
-        self.l2 = nn.Linear(400, 300)
-        self.l3 = nn.Linear(300, 1)
-        
-        # Q2 architecture
-        self.l4 = nn.Linear(state_dim + action_dim, 400)
-        self.l5 = nn.Linear(400, 300)
-        self.l6 = nn.Linear(300, 1)
-        
+        q1_layers = []
+        last_dim = in_dim
+        for h in hidden_sizes:
+            q1_layers.append(nn.Linear(last_dim, h))
+            last_dim = h
+        self.q1_hidden_layers = nn.ModuleList(q1_layers)
+        self.q1_out = nn.Linear(last_dim, 1)
+
+        # Q2 architecture (identical sizes)
+        q2_layers = []
+        last_dim = in_dim
+        for h in hidden_sizes:
+            q2_layers.append(nn.Linear(last_dim, h))
+            last_dim = h
+        self.q2_hidden_layers = nn.ModuleList(q2_layers)
+        self.q2_out = nn.Linear(last_dim, 1)
+
     def forward(self, state, action):
         sa = torch.cat([state, action], 1)
-        
-        q1 = F.relu(self.l1(sa))
-        q1 = F.relu(self.l2(q1))
-        q1 = self.l3(q1)
-        
-        q2 = F.relu(self.l4(sa))
-        q2 = F.relu(self.l5(q2))
-        q2 = self.l6(q2)
+
+        q1 = sa
+        for layer in self.q1_hidden_layers:
+            q1 = F.relu(layer(q1))
+        q1 = self.q1_out(q1)
+
+        q2 = sa
+        for layer in self.q2_hidden_layers:
+            q2 = F.relu(layer(q2))
+        q2 = self.q2_out(q2)
         return q1, q2
-    
+
     def Q1(self, state, action):
         sa = torch.cat([state, action], 1)
-        
-        q1 = F.relu(self.l1(sa))
-        q1 = F.relu(self.l2(q1))
-        q1 = self.l3(q1)
+        q1 = sa
+        for layer in self.q1_hidden_layers:
+            q1 = F.relu(layer(q1))
+        q1 = self.q1_out(q1)
         return q1
 
 
 class TD3Agent:
-    def __init__(self, state_dim=3, action_dim=2, max_action=1.0, lr=3e-4):
+    def __init__(self, state_dim=3, action_dim=2, max_action=1.0, lr=3e-4,
+                 actor_hidden_sizes=None, critic_hidden_sizes=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.state_dim = state_dim  # Store for checkpointing
         self.action_dim = action_dim
-        
-        self.actor = Actor(state_dim, action_dim, max_action).to(self.device)
-        self.actor_target = Actor(state_dim, action_dim, max_action).to(self.device)
+
+        # Store architecture
+        self.actor_hidden_sizes = actor_hidden_sizes if actor_hidden_sizes is not None else [64, 64]
+        self.critic_hidden_sizes = critic_hidden_sizes if critic_hidden_sizes is not None else [400, 300]
+
+        self.actor = Actor(state_dim, action_dim, max_action, hidden_sizes=self.actor_hidden_sizes).to(self.device)
+        self.actor_target = Actor(state_dim, action_dim, max_action, hidden_sizes=self.actor_hidden_sizes).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
-        
-        self.critic = Critic(state_dim, action_dim).to(self.device)
-        self.critic_target = Critic(state_dim, action_dim).to(self.device)
+
+        self.critic = Critic(state_dim, action_dim, hidden_sizes=self.critic_hidden_sizes).to(self.device)
+        self.critic_target = Critic(state_dim, action_dim, hidden_sizes=self.critic_hidden_sizes).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
         
@@ -111,6 +139,8 @@ class TD3Agent:
             'state_dim': self.state_dim,
             'action_dim': self.action_dim,
             'max_action': self.max_action,
+            'actor_hidden_sizes': self.actor_hidden_sizes,
+            'critic_hidden_sizes': self.critic_hidden_sizes,
         }, filename)
     
     def load(self, filename):
@@ -120,6 +150,14 @@ class TD3Agent:
         # Verify state dimensions match
         if 'state_dim' in checkpoint and checkpoint['state_dim'] != self.state_dim:
             raise ValueError(f"Model state_dim mismatch: expected {self.state_dim}, got {checkpoint['state_dim']}")
+
+        # Verify architecture compatibility when available
+        ckpt_actor_sizes = checkpoint.get('actor_hidden_sizes', None)
+        ckpt_critic_sizes = checkpoint.get('critic_hidden_sizes', None)
+        if ckpt_actor_sizes is not None and ckpt_actor_sizes != self.actor_hidden_sizes:
+            raise ValueError(f"Actor architecture mismatch: expected {self.actor_hidden_sizes}, got {ckpt_actor_sizes}. Construct agent with matching sizes.")
+        if ckpt_critic_sizes is not None and ckpt_critic_sizes != self.critic_hidden_sizes:
+            raise ValueError(f"Critic architecture mismatch: expected {self.critic_hidden_sizes}, got {ckpt_critic_sizes}. Construct agent with matching sizes.")
         
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
@@ -188,9 +226,12 @@ class TD3Controller(BaseController):
         state_dim = checkpoint.get('state_dim', 3)  # Default to 3 for backward compatibility
         action_dim = checkpoint.get('action_dim', 2)
         max_action = checkpoint.get('max_action', 1.0)
+        actor_hidden_sizes = checkpoint.get('actor_hidden_sizes', [64, 64])
+        critic_hidden_sizes = checkpoint.get('critic_hidden_sizes', [400, 300])
         
         # Create agent with correct dimensions
-        self.agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, max_action=max_action)
+        self.agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, max_action=max_action,
+                               actor_hidden_sizes=actor_hidden_sizes, critic_hidden_sizes=critic_hidden_sizes)
         self.agent.load(model_path)
         self.agent.train_mode(False)  # Set to evaluation mode
         
@@ -287,8 +328,17 @@ class TD3Trainer:
         else:
             state_dim = base_state_dim
         
+        # Network architecture from config (with sensible defaults and backward compatibility)
+        actor_hidden_sizes = config.get('actor_hidden_sizes', [64, 64])
+        critic_hidden_sizes = config.get('critic_hidden_sizes', [400, 300])
+
         # Initialize agent and replay buffer
-        self.agent = TD3Agent(state_dim=state_dim, lr=config['actor_lr'])
+        self.agent = TD3Agent(state_dim=state_dim,
+                              action_dim=2,
+                              max_action=1.0,
+                              lr=config['actor_lr'],
+                              actor_hidden_sizes=actor_hidden_sizes,
+                              critic_hidden_sizes=critic_hidden_sizes)
         self.replay_buffer = ReplayMemory(config['buffer_size'])
         
         # Training state
