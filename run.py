@@ -148,6 +148,7 @@ def main():
         print("Arrow Keys - Direct wheel control")
         print("R - Reset car position")
         print("T - Toggle track edge visibility")
+        print("D - Toggle distance heatmap")
         print("H - Toggle rendering (headless/visual)")
         print("1-9 - Switch map set")
         print("ESC - Exit")
@@ -183,6 +184,9 @@ def main():
                     elif event.key == pygame.K_t:
                         env.show_track_edges = not env.show_track_edges
                         print(f"Track edges: {'ON' if env.show_track_edges else 'OFF'}")
+                    elif event.key == pygame.K_d:
+                        env.show_distance_heatmap = not env.show_distance_heatmap
+                        print(f"Distance heatmap: {'ON' if env.show_distance_heatmap else 'OFF'}")
                     elif event.key == pygame.K_h:
                         render_enabled = not render_enabled
                         print(f"Rendering: {'ON' if render_enabled else 'OFF'}")

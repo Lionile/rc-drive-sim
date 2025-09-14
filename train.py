@@ -94,6 +94,7 @@ def main():
         print("  C - Toggle collision box")
         print("  T - Toggle track edges")
         print("  R - Toggle racing line")
+        print("  D - Toggle distance heatmap")
         print("  H - Toggle rendering")
     else:
         print(f"Rendering: OFF (use --render to enable)")

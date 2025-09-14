@@ -15,8 +15,8 @@ from simulation.sensors import SensorArray
 
 class Environment:
     def __init__(self, map_path, window_size=(1024, 1024), show_collision_box=True, 
-                 show_sensors=True, show_racing_line=True, show_track_edges=False, display_map_path=None, 
-                 headless=False):
+                 show_sensors=True, show_racing_line=True, show_track_edges=False, 
+                 show_distance_heatmap=False, display_map_path=None, headless=False):
         """
         Initialize the RC car environment.
         
@@ -34,6 +34,7 @@ class Environment:
         self.show_sensors = show_sensors
         self.show_racing_line = show_racing_line
         self.show_track_edges = show_track_edges
+        self.show_distance_heatmap = show_distance_heatmap
         self.headless = headless
         
         # init pygame - only create window if not headless
@@ -126,8 +127,11 @@ class Environment:
         self.distance_field = load_distance_field(self.map_path)
         if self.distance_field is not None:
             print(f"✓ Loaded distance field: {self.distance_field.shape}")
+            # Precompute heatmap visualization surface
+            self.distance_heatmap_surface = self._create_distance_heatmap_surface()
         else:
             print("⚠ No distance field found - proximity penalties disabled")
+            self.distance_heatmap_surface = None
     
     def reset(self):
         """Reset the environment to initial state."""
@@ -323,6 +327,76 @@ class Environment:
         
         return 0.0
     
+    def _create_distance_heatmap_surface(self):
+        """Create a transparent colored heatmap surface from the distance field."""
+        if self.distance_field is None or self.headless:
+            return None
+        
+        # Get distance field dimensions
+        height, width = self.distance_field.shape
+        
+        # Create RGBA array for efficient batch processing
+        rgba_array = np.zeros((height, width, 4), dtype=np.uint8)
+        
+        # Vectorized colormap generation
+        d = self.distance_field.astype(np.float32)
+        
+        # Initialize RGB channels
+        r = np.zeros_like(d, dtype=np.uint8)
+        g = np.zeros_like(d, dtype=np.uint8) 
+        b = np.zeros_like(d, dtype=np.uint8)
+        
+        # Zone 1: Very close to walls (0-0.25): blue to purple
+        mask1 = d < 0.25
+        t1 = np.where(mask1, d / 0.25, 0)
+        r[mask1] = (128 * t1[mask1]).astype(np.uint8)
+        g[mask1] = 0
+        b[mask1] = 255
+        
+        # Zone 2: Close to walls (0.25-0.5): purple to red
+        mask2 = (d >= 0.25) & (d < 0.5)
+        t2 = np.where(mask2, (d - 0.25) / 0.25, 0)
+        r[mask2] = (128 + 127 * t2[mask2]).astype(np.uint8)
+        g[mask2] = 0
+        b[mask2] = (255 * (1 - t2[mask2])).astype(np.uint8)
+        
+        # Zone 3: Medium distance (0.5-0.75): red to yellow
+        mask3 = (d >= 0.5) & (d < 0.75)
+        t3 = np.where(mask3, (d - 0.5) / 0.25, 0)
+        r[mask3] = 255
+        g[mask3] = (255 * t3[mask3]).astype(np.uint8)
+        b[mask3] = 0
+        
+        # Zone 4: Far from walls (0.75-1.0): yellow to green
+        mask4 = d >= 0.75
+        t4 = np.where(mask4, (d - 0.75) / 0.25, 0)
+        r[mask4] = (255 * (1 - t4[mask4])).astype(np.uint8)
+        g[mask4] = 255
+        b[mask4] = 0
+        
+        # Set alpha based on distance (closer to walls = more opaque)
+        alpha = np.clip(150 * (1 - d) + 50, 30, 180).astype(np.uint8)
+        
+        # Assemble RGBA array
+        rgba_array[:, :, 0] = r
+        rgba_array[:, :, 1] = g
+        rgba_array[:, :, 2] = b
+        rgba_array[:, :, 3] = alpha
+        
+        # Create pygame surface and set pixels efficiently
+        heatmap_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        
+        # Convert to format pygame expects: (width, height, 3) for RGB
+        rgb_array = np.stack([r, g, b], axis=2).swapaxes(0, 1)  # (width, height, 3)
+        
+        # Use surfarray for efficient pixel setting
+        pygame.surfarray.blit_array(heatmap_surface, rgb_array[:, :, :3])
+        
+        # Apply overall transparency
+        heatmap_surface.set_alpha(120)  # Make the whole surface semi-transparent
+        
+        return heatmap_surface
+    
     def render(self):
         """Render the environment."""
         if self.headless or self.screen is None:
@@ -332,6 +406,10 @@ class Environment:
         
         if self.map_image is not None:
             self.screen.blit(self.map_image, (0, 0))
+        
+        # distance heatmap overlay (render after track but before other elements)
+        if self.show_distance_heatmap and self.distance_heatmap_surface is not None:
+            self.screen.blit(self.distance_heatmap_surface, (0, 0))
         
         # racing line
         if self.show_racing_line and self.racing_lines:

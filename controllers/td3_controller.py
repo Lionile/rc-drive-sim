@@ -318,6 +318,9 @@ class TD3Trainer:
                         elif event.key == pygame.K_r:
                             self.env.show_racing_line = not self.env.show_racing_line
                             print(f"Racing line: {'ON' if self.env.show_racing_line else 'OFF'}")
+                        elif event.key == pygame.K_d:
+                            self.env.show_distance_heatmap = not self.env.show_distance_heatmap
+                            print(f"Distance heatmap: {'ON' if self.env.show_distance_heatmap else 'OFF'}")
                         elif event.key == pygame.K_h:
                             self.render = not self.render
                             print(f"Rendering: {'ON' if self.render else 'OFF'}")
