@@ -67,6 +67,7 @@ class Environment:
         self.prev_position = None
         self.prev_heading = None
         self._last_dt = 1.0/60.0
+        self.last_reward = 0.0  # Track last reward for display
         
         # Cache for sensor readings to avoid multiple calculations per frame
         self._sensor_cache = {
@@ -188,6 +189,7 @@ class Environment:
         collision = self.check_collision()
         
         reward = self.calculate_reward(collision)
+        self.last_reward = reward  # Store for display
         
         # check episode termination conditions
         self.current_step += 1
@@ -317,10 +319,10 @@ class Environment:
         # Convert to proximity penalty
         # Higher penalty for lower distance values (closer to walls)
         # Smooth penalty that ramps up as distance_value decreases
-        safety_threshold = 0.7  # Below this value, start applying penalty (accounting for car width)
+        safety_threshold = 1.0  # Below this value, start applying penalty (accounting for car width)
         if distance_value < safety_threshold:
             # Quadratic penalty that increases as we get closer to walls
-            penalty_strength = 5.0  # Adjust this to make car more/less "afraid"
+            penalty_strength = 30.0  # Adjust this to make car more/less "afraid"
             normalized_proximity = (safety_threshold - distance_value) / safety_threshold
             penalty = penalty_strength * (normalized_proximity ** 2)
             return penalty
@@ -475,6 +477,7 @@ class Environment:
         # get sensor readings for display (use cached to avoid redundant computation)
         sensor_readings = self._get_cached_sensor_readings()
         info_lines.append(f"Sensors: {[f'{r:.2f}' for r in sensor_readings]}")
+        info_lines.append(f"Last Reward: {self.last_reward:.3f}")
         
         for i, line in enumerate(info_lines):
             text = self.debug_font.render(line, True, (255, 255, 255))

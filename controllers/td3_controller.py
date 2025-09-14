@@ -21,9 +21,9 @@ from utils.geometry import distance
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
         super(Actor, self).__init__()
-        self.l1 = nn.Linear(state_dim, 32)
-        self.l2 = nn.Linear(32, 32)
-        self.l3 = nn.Linear(32, action_dim)
+        self.l1 = nn.Linear(state_dim, 64)
+        self.l2 = nn.Linear(64, 64)
+        self.l3 = nn.Linear(64, action_dim)
         
         self.max_action = max_action
         
@@ -71,6 +71,8 @@ class Critic(nn.Module):
 class TD3Agent:
     def __init__(self, state_dim=3, action_dim=2, max_action=1.0, lr=3e-4):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.state_dim = state_dim  # Store for checkpointing
+        self.action_dim = action_dim
         
         self.actor = Actor(state_dim, action_dim, max_action).to(self.device)
         self.actor_target = Actor(state_dim, action_dim, max_action).to(self.device)
@@ -106,11 +108,19 @@ class TD3Agent:
             'critic_state_dict': self.critic.state_dict(),
             'actor_optimizer_state_dict': self.actor_optimizer.state_dict(),
             'critic_optimizer_state_dict': self.critic_optimizer.state_dict(),
+            'state_dim': self.state_dim,
+            'action_dim': self.action_dim,
+            'max_action': self.max_action,
         }, filename)
     
     def load(self, filename):
         """Load model parameters."""
         checkpoint = torch.load(filename, map_location=self.device)
+        
+        # Verify state dimensions match
+        if 'state_dim' in checkpoint and checkpoint['state_dim'] != self.state_dim:
+            raise ValueError(f"Model state_dim mismatch: expected {self.state_dim}, got {checkpoint['state_dim']}")
+        
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
         self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
@@ -125,6 +135,9 @@ class TD3Controller(BaseController):
     def __init__(self, model_path=None):
         super().__init__()
         self.agent = None
+        self.past_states_enabled = False
+        self.past_states_buffer = None
+        self.past_states_index = 0
         
         if model_path:
             self.load_model(model_path)
@@ -147,8 +160,21 @@ class TD3Controller(BaseController):
         if not isinstance(observation, np.ndarray):
             observation = np.array(observation)
         
+        # Create augmented state if past states are enabled
+        if self.past_states_enabled:
+            augmented_obs = self._get_augmented_state(observation)
+        else:
+            augmented_obs = observation
+        
         # Get deterministic action for inference
-        action = self.agent.act(observation, deterministic=True)
+        action = self.agent.act(augmented_obs, deterministic=True)
+        
+        # Update past states buffer for next inference step
+        if self.past_states_enabled:
+            if hasattr(self, 'past_states_source') and self.past_states_source == 'wheels':
+                self._update_past_states_buffer(action=action.copy())
+            else:
+                self._update_past_states_buffer(observation=observation)
         
         # Clamp to [-1, 1] range
         action = np.clip(action, -1.0, 1.0)
@@ -157,14 +183,72 @@ class TD3Controller(BaseController):
     
     def load_model(self, model_path):
         """Load a trained TD3 model."""
-        self.agent = TD3Agent()
+        # Peek checkpoint to get state dimensions
+        checkpoint = torch.load(model_path, map_location='cpu')
+        state_dim = checkpoint.get('state_dim', 3)  # Default to 3 for backward compatibility
+        action_dim = checkpoint.get('action_dim', 2)
+        max_action = checkpoint.get('max_action', 1.0)
+        
+        # Create agent with correct dimensions
+        self.agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, max_action=max_action)
         self.agent.load(model_path)
         self.agent.train_mode(False)  # Set to evaluation mode
-        print(f"✓ Loaded TD3 model from {model_path}")
+        
+        # Auto-detect if past states are needed based on state_dim
+        base_state_dim = 3  # sensor readings
+        if state_dim > base_state_dim:
+            self.past_states_enabled = True
+            # Assume wheels source for simplicity (most common case)
+            past_dim = state_dim - base_state_dim
+            self.past_states_count = past_dim // 2  # 2 values per wheel state
+            self.past_states_stride = 3  # Default stride
+            self.past_states_source = 'wheels'
+            
+            # Initialize ring buffer
+            buffer_size = self.past_states_stride * self.past_states_count + 1
+            self.past_states_buffer = np.zeros((buffer_size, 2), dtype=np.float32)
+            print(f"✓ Auto-detected past states: count={self.past_states_count}, source=wheels")
+        
+        print(f"✓ Loaded TD3 model from {model_path} (state_dim={state_dim})")
+    
+    def _update_past_states_buffer(self, action=None, observation=None):
+        """Update the ring buffer with new action or observation data."""
+        if not self.past_states_enabled or self.past_states_buffer is None:
+            return
+        
+        if hasattr(self, 'past_states_source') and self.past_states_source == 'wheels' and action is not None:
+            # Store wheel velocities
+            self.past_states_buffer[self.past_states_index] = action
+        elif observation is not None:
+            # Store sensor readings
+            self.past_states_buffer[self.past_states_index] = observation
+        
+        # Advance ring buffer index
+        self.past_states_index = (self.past_states_index + 1) % len(self.past_states_buffer)
+    
+    def _get_augmented_state(self, current_obs):
+        """Create augmented state by combining current observation with past states."""
+        if not self.past_states_enabled or self.past_states_buffer is None:
+            return current_obs
+        
+        # Start with current observation
+        augmented = [current_obs]
+        
+        # Add past states with stride
+        for i in range(self.past_states_count):
+            # Calculate index: go back by (i+1) * stride steps
+            past_index = (self.past_states_index - (i + 1) * self.past_states_stride) % len(self.past_states_buffer)
+            past_state = self.past_states_buffer[past_index]
+            augmented.append(past_state)
+        
+        # Concatenate all states
+        return np.concatenate(augmented, axis=0)
     
     def reset(self):
         """Reset controller state."""
-        pass
+        if self.past_states_enabled and self.past_states_buffer is not None:
+            self.past_states_buffer.fill(0.0)
+            self.past_states_index = 0
 
 
 class TD3Trainer:
@@ -184,13 +268,56 @@ class TD3Trainer:
         self.noise_clip = config['noise_clip']
         self.warmup_steps = config['warmup_steps']
         
+        # Past states configuration
+        self.past_states_config = config.get('past_states', {})
+        self.past_states_enabled = self.past_states_config.get('enabled', False)
+        
+        # Compute state dimension
+        base_state_dim = 3  # Default sensor count
+        if self.past_states_enabled:
+            source = self.past_states_config.get('source', 'wheels')
+            count = self.past_states_config.get('count', 4)
+            if source == 'wheels':
+                past_dim = count * 2  # 2 wheel velocities per past state
+            elif source == 'sensors':
+                past_dim = count * base_state_dim  # 3 sensors per past state
+            else:
+                raise ValueError(f"Unknown past_states source: {source}")
+            state_dim = base_state_dim + past_dim
+        else:
+            state_dim = base_state_dim
+        
         # Initialize agent and replay buffer
-        self.agent = TD3Agent(lr=config['actor_lr'])
+        self.agent = TD3Agent(state_dim=state_dim, lr=config['actor_lr'])
         self.replay_buffer = ReplayMemory(config['buffer_size'])
         
         # Training state
         self.total_steps = 0
         self.episode_num = 0
+        
+        # Past states ring buffer
+        if self.past_states_enabled:
+            source = self.past_states_config.get('source', 'wheels')
+            count = self.past_states_config.get('count', 4)
+            stride = self.past_states_config.get('stride', 3)
+            
+            # Ring buffer size needs to accommodate stride * count
+            buffer_size = stride * count + 1  # +1 for current state
+            if source == 'wheels':
+                self.past_states_buffer = np.zeros((buffer_size, 2), dtype=np.float32)  # [left_vel, right_vel]
+            elif source == 'sensors':
+                self.past_states_buffer = np.zeros((buffer_size, base_state_dim), dtype=np.float32)
+            
+            self.past_states_source = source
+            self.past_states_count = count
+            self.past_states_stride = stride
+            self.past_states_index = 0  # Current position in ring buffer
+        else:
+            self.past_states_buffer = None
+            self.past_states_source = None
+            self.past_states_count = 0
+            self.past_states_stride = 0
+            self.past_states_index = 0
         
         # Best model tracking
         self.best_reward = float('-inf')  # Track highest reward achieved
@@ -252,6 +379,7 @@ class TD3Trainer:
     def _run_episode(self):
         """Run a single episode and collect experience."""
         obs = self.env.reset()
+        self._reset_past_states_buffer()  # Reset past states buffer at episode start
         episode_reward = 0
         episode_steps = 0
         episode_distance = 0
@@ -259,6 +387,9 @@ class TD3Trainer:
         epsilon = self.config.get('epsilon', 0.1)  # small probability of random action
 
         while True:
+            # Create augmented state for policy input
+            augmented_obs = self._get_augmented_state(obs)
+            
             # Get action
             if self.total_steps < self.warmup_steps:
                 # Random actions during warmup
@@ -269,13 +400,22 @@ class TD3Trainer:
                     action = np.random.uniform(-1, 1, 2)
                 else:
                     # Policy action (deterministic), then add Gaussian exploration noise
-                    action = self.agent.act(obs, deterministic=True)
+                    action = self.agent.act(augmented_obs, deterministic=True)
                     noise = np.random.normal(0, self.noise_sigma, size=action.shape)
                     noise = np.clip(noise, -self.noise_clip, self.noise_clip)
                     action = np.clip(action + noise, -1, 1)
             
+            # Update past states buffer with current action or observation
+            if self.past_states_source == 'wheels':
+                self._update_past_states_buffer(action=action)
+            elif self.past_states_source == 'sensors':
+                self._update_past_states_buffer(observation=obs)
+            
             # Step environment
             next_obs, reward, terminated, truncated, info = self.env.step(action, dt=1.0/60.0)
+            
+            # Create augmented next state
+            augmented_next_obs = self._get_augmented_state(next_obs)
             
             # Calculate distance traveled
             current_pos = info['position']
@@ -287,12 +427,12 @@ class TD3Trainer:
             episode_steps += 1
             self.total_steps += 1
             
-            # Store transition in replay buffer
+            # Store transition in replay buffer (use augmented states)
             done = terminated or truncated
             self.replay_buffer.push(
-                torch.FloatTensor(obs),
+                torch.FloatTensor(augmented_obs),
                 torch.FloatTensor(action),
-                torch.FloatTensor(next_obs),
+                torch.FloatTensor(augmented_next_obs),
                 torch.FloatTensor([reward]),
                 torch.FloatTensor([float(done)])
             )
@@ -387,6 +527,45 @@ class TD3Trainer:
             
             for param, target_param in zip(self.agent.actor.parameters(), self.agent.actor_target.parameters()):
                 target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+    
+    def _update_past_states_buffer(self, action=None, observation=None):
+        """Update the ring buffer with new action or observation data."""
+        if not self.past_states_enabled:
+            return
+        
+        if self.past_states_source == 'wheels' and action is not None:
+            # Store wheel velocities
+            self.past_states_buffer[self.past_states_index] = action
+        elif self.past_states_source == 'sensors' and observation is not None:
+            # Store sensor readings
+            self.past_states_buffer[self.past_states_index] = observation
+        
+        # Advance ring buffer index
+        self.past_states_index = (self.past_states_index + 1) % len(self.past_states_buffer)
+    
+    def _get_augmented_state(self, current_obs):
+        """Create augmented state by combining current observation with past states."""
+        if not self.past_states_enabled:
+            return current_obs
+        
+        # Start with current observation
+        augmented = [current_obs]
+        
+        # Add past states with stride
+        for i in range(self.past_states_count):
+            # Calculate index: go back by (i+1) * stride steps
+            past_index = (self.past_states_index - (i + 1) * self.past_states_stride) % len(self.past_states_buffer)
+            past_state = self.past_states_buffer[past_index]
+            augmented.append(past_state)
+        
+        # Concatenate all states
+        return np.concatenate(augmented, axis=0)
+    
+    def _reset_past_states_buffer(self):
+        """Reset past states buffer (call at episode start)."""
+        if self.past_states_enabled:
+            self.past_states_buffer.fill(0.0)
+            self.past_states_index = 0
     
     def _save_final_model(self):
         """Save the final trained model."""
