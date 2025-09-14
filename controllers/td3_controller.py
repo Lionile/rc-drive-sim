@@ -21,9 +21,9 @@ from utils.geometry import distance
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
         super(Actor, self).__init__()
-        self.l1 = nn.Linear(state_dim, 400)
-        self.l2 = nn.Linear(400, 300)
-        self.l3 = nn.Linear(300, action_dim)
+        self.l1 = nn.Linear(state_dim, 32)
+        self.l2 = nn.Linear(32, 32)
+        self.l3 = nn.Linear(32, action_dim)
         
         self.max_action = max_action
         
@@ -192,6 +192,9 @@ class TD3Trainer:
         self.total_steps = 0
         self.episode_num = 0
         
+        # Best model tracking
+        self.best_reward = float('-inf')  # Track highest reward achieved
+        
         # Metrics tracking
         self.metrics = []
 
@@ -232,6 +235,9 @@ class TD3Trainer:
                 print(f"Episode {self.episode_num}: Reward={episode_reward:.2f}, "
                       f"Steps={episode_steps}, Distance={episode_distance:.2f}, "
                       f"Avg Speed={avg_speed:.2f}")
+            
+            # Save best model if new best reward achieved
+            self._save_best_model(episode_reward, self.episode_num)
             
             # Periodic checkpoint save
             if self.save_every_episodes > 0 and (self.episode_num % self.save_every_episodes == 0):
@@ -390,6 +396,16 @@ class TD3Trainer:
         ckpt_path = self.save_dir / f"checkpoint_ep{episode_num}.pt"
         self.agent.save(ckpt_path)
         print(f"✓ Checkpoint saved at episode {episode_num} to {ckpt_path}")
+    
+    def _save_best_model(self, episode_reward: float, episode_num: int):
+        """Save model if it achieves a new best reward."""
+        if episode_reward > self.best_reward:
+            self.best_reward = episode_reward
+            best_path = self.save_dir / "best_model.pt"
+            self.agent.save(best_path)
+            print(f"✓ New best model saved at episode {episode_num} with reward {episode_reward:.2f} to {best_path}")
+            return True
+        return False
     
     def _save_metrics(self):
         """Save training metrics to CSV."""

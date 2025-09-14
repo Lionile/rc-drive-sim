@@ -40,7 +40,8 @@ def build_env(map_id, render=False):
         show_collision_box=render,  # Show collision box if rendering
         show_sensors=render,        # Show sensors if rendering
         show_racing_line=False,
-        show_track_edges=False
+        show_track_edges=False,
+        headless=not render  # Run headless when not rendering
     )
     return env
 

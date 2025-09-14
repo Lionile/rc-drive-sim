@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 def downsample_path(path, num_points=30):
     path_length = len(path)
@@ -238,6 +239,39 @@ def visualize_racing_line():
     plt.legend()
     plt.axis('off')
     plt.show()
+
+
+def load_distance_field(map_path):
+    """
+    Load distance field image corresponding to the given map path.
+    
+    Args:
+        map_path (str): Path to the map file (e.g., "maps/map_start1.png")
+        
+    Returns:
+        np.ndarray or None: Distance field as float32 array normalized to [0,1], 
+                           or None if distance field file not found
+    """
+    # Extract directory and base filename
+    dirname, filename = os.path.split(map_path)
+    
+    # Simple replacement: map_start1.png -> map_distance1.png
+    distance_filename = filename.replace("map_start", "map_distance")
+    distance_path = os.path.join(dirname, distance_filename)
+    
+    # Load distance field if it exists
+    if os.path.exists(distance_path):
+        try:
+            # Load as grayscale
+            distance_img = cv2.imread(distance_path, cv2.IMREAD_GRAYSCALE)
+            if distance_img is not None:
+                # Convert to float32 and normalize to [0,1]
+                distance_field = distance_img.astype(np.float32) / 255.0
+                return distance_field
+        except Exception as e:
+            print(f"Warning: Could not load distance field from {distance_path}: {e}")
+    
+    return None
 
 
 # test and plot racing line generation

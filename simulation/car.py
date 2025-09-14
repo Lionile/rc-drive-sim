@@ -63,8 +63,6 @@ class DifferentialDriveCar:
                 ],
             )
         
-        self.sprite = self.original_sprite
-        
     def set_wheel_velocities(self, left_vel, right_vel):
         """Set the wheel velocities (-1 to 1)."""
         self.left_wheel_velocity = np.clip(left_vel, -1.0, 1.0)
@@ -94,15 +92,6 @@ class DifferentialDriveCar:
                     
         # Normalize heading to [-pi, pi]
         self.heading = math.atan2(math.sin(self.heading), math.cos(self.heading))
-        
-        # Update sprite rotation
-        self.update_sprite()
-    
-    def update_sprite(self):
-        """Update the rotated sprite based on current heading."""
-        # Convert heading to degrees (pygame uses degrees, and 0 degrees is right)
-        angle_degrees = -math.degrees(self.heading)
-        self.sprite = pygame.transform.rotate(self.original_sprite, angle_degrees)
     
     def get_position(self):
         """Get current position as (x, y) tuple."""
@@ -142,9 +131,9 @@ class DifferentialDriveCar:
         
         return corners_world
     
-    def get_render_rect(self):
+    def get_render_rect(self, rotated_sprite):
         """Get the rectangle for rendering the sprite."""
-        sprite_rect = self.sprite.get_rect()
+        sprite_rect = rotated_sprite.get_rect()
         sprite_rect.center = (int(self.x), int(self.y))
         return sprite_rect
     
@@ -155,4 +144,3 @@ class DifferentialDriveCar:
         self.heading = heading
         self.left_wheel_velocity = 0.0
         self.right_wheel_velocity = 0.0
-        self.update_sprite()

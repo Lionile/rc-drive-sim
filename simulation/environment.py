@@ -8,14 +8,15 @@ import numpy as np
 import math
 import os
 
-from utils.map_generator import extract_and_scale_contours, generate_racing_line
+from utils.map_utils import extract_and_scale_contours, generate_racing_line, load_distance_field
 from utils.geometry import segment_intersection, distance, contour_to_segments
 from simulation.car import DifferentialDriveCar
 from simulation.sensors import SensorArray
 
 class Environment:
     def __init__(self, map_path, window_size=(1024, 1024), show_collision_box=True, 
-                 show_sensors=True, show_racing_line=True, show_track_edges=False, display_map_path=None):
+                 show_sensors=True, show_racing_line=True, show_track_edges=False, display_map_path=None, 
+                 headless=False):
         """
         Initialize the RC car environment.
         
@@ -26,20 +27,25 @@ class Environment:
             show_sensors: Whether to show sensor rays
             show_racing_line: Whether to show racing line
             show_track_edges: Whether to show track boundary edges
+            headless: If True, skip pygame window creation for faster headless training
         """
         self.window_size = window_size
         self.show_collision_box = show_collision_box
         self.show_sensors = show_sensors
         self.show_racing_line = show_racing_line
         self.show_track_edges = show_track_edges
+        self.headless = headless
         
-        # init pygame
+        # init pygame - only create window if not headless
         pygame.init()
-        self.screen = pygame.display.set_mode(window_size)
-        pygame.display.set_caption("RC Car Simulation")
-        
-        # Cache font object to avoid recreating every frame
-        self.debug_font = pygame.font.Font(None, 24)
+        if not headless:
+            self.screen = pygame.display.set_mode(window_size)
+            pygame.display.set_caption("RC Car Simulation")
+            # Cache font object to avoid recreating every frame
+            self.debug_font = pygame.font.Font(None, 24)
+        else:
+            self.screen = None
+            self.debug_font = None
         
         # map and track data
         self.map_path = map_path
@@ -86,7 +92,11 @@ class Environment:
             if not os.path.exists(display_path):
                 display_path = self.map_path
         
-        self.map_image = pygame.image.load(display_path).convert()
+        # Only load map image for rendering (not needed in headless mode)
+        if not self.headless:
+            self.map_image = pygame.image.load(display_path).convert()
+        else:
+            self.map_image = None
         
         # map data
         boundaries_outer, boundaries_inner, start_points, headings = extract_and_scale_contours(self.map_path)
@@ -111,6 +121,13 @@ class Environment:
         except Exception as e:
             print(f"Could not generate racing line: {e}")
             self.racing_lines = []
+        
+        # Load distance field for proximity calculations
+        self.distance_field = load_distance_field(self.map_path)
+        if self.distance_field is not None:
+            print(f"✓ Loaded distance field: {self.distance_field.shape}")
+        else:
+            print("⚠ No distance field found - proximity penalties disabled")
     
     def reset(self):
         """Reset the environment to initial state."""
@@ -272,14 +289,49 @@ class Environment:
         # Update previous heading for next step
         self.prev_heading = current_heading
 
-        # Reward forward motion minus heading-change penalty
-        return 10.0 * forward_progress - heading_penalty
+        # Proximity penalty based on distance field
+        proximity_penalty = self._calculate_proximity_penalty()
+
+        # Reward forward motion minus penalties
+        return 10.0 * forward_progress - heading_penalty - proximity_penalty
+    
+    def _calculate_proximity_penalty(self):
+        """Calculate proximity penalty based on distance field."""
+        if self.distance_field is None:
+            return 0.0
+        
+        # Get car center position
+        car_x, car_y = self.car.get_position()
+        
+        # Convert to pixel coordinates (clamp to image bounds)
+        px = int(np.clip(car_x, 0, self.distance_field.shape[1] - 1))
+        py = int(np.clip(car_y, 0, self.distance_field.shape[0] - 1))
+        
+        # Get distance value (0=wall, 1=safe area)
+        distance_value = self.distance_field[py, px]
+        
+        # Convert to proximity penalty
+        # Higher penalty for lower distance values (closer to walls)
+        # Smooth penalty that ramps up as distance_value decreases
+        safety_threshold = 0.7  # Below this value, start applying penalty (accounting for car width)
+        if distance_value < safety_threshold:
+            # Quadratic penalty that increases as we get closer to walls
+            penalty_strength = 5.0  # Adjust this to make car more/less "afraid"
+            normalized_proximity = (safety_threshold - distance_value) / safety_threshold
+            penalty = penalty_strength * (normalized_proximity ** 2)
+            return penalty
+        
+        return 0.0
     
     def render(self):
         """Render the environment."""
+        if self.headless or self.screen is None:
+            return  # Skip rendering in headless mode
+            
         self.screen.fill((50, 50, 50))
         
-        self.screen.blit(self.map_image, (0, 0))
+        if self.map_image is not None:
+            self.screen.blit(self.map_image, (0, 0))
         
         # racing line
         if self.show_racing_line and self.racing_lines:
@@ -289,9 +341,11 @@ class Environment:
                         color = (255, 255 - i * 255 // len(racing_line), 0)
                         pygame.draw.circle(self.screen, color, (int(point[0]), int(point[1])), 2)
         
-        # car
-        car_rect = self.car.get_render_rect()
-        self.screen.blit(self.car.sprite, car_rect)
+        # car - rotate sprite based on current heading for rendering
+        angle_degrees = -math.degrees(self.car.get_heading())
+        rotated_sprite = pygame.transform.rotate(self.car.original_sprite, angle_degrees)
+        car_rect = self.car.get_render_rect(rotated_sprite)
+        self.screen.blit(rotated_sprite, car_rect)
         
         # collision box
         if self.show_collision_box:
@@ -326,6 +380,8 @@ class Environment:
     
     def draw_debug_info(self, fps=None):
         """Draw debug information on screen."""
+        if self.headless or self.screen is None or self.debug_font is None:
+            return  # Skip drawing in headless mode
         
         # car info
         car_x, car_y = self.car.get_position()
