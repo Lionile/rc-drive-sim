@@ -92,7 +92,7 @@ class Critic(nn.Module):
 
 
 class TD3Agent:
-    def __init__(self, state_dim=3, action_dim=2, max_action=1.0, lr=3e-4,
+    def __init__(self, state_dim=3, action_dim=2, max_action=1.0, actor_lr=3e-4, critic_lr=3e-4,
                  actor_hidden_sizes=None, critic_hidden_sizes=None):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.state_dim = state_dim  # Store for checkpointing
@@ -105,12 +105,12 @@ class TD3Agent:
         self.actor = Actor(state_dim, action_dim, max_action, hidden_sizes=self.actor_hidden_sizes).to(self.device)
         self.actor_target = Actor(state_dim, action_dim, max_action, hidden_sizes=self.actor_hidden_sizes).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=lr)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_lr)
 
         self.critic = Critic(state_dim, action_dim, hidden_sizes=self.critic_hidden_sizes).to(self.device)
         self.critic_target = Critic(state_dim, action_dim, hidden_sizes=self.critic_hidden_sizes).to(self.device)
         self.critic_target.load_state_dict(self.critic.state_dict())
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=lr)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_lr)
         
         self.max_action = max_action
         self.training_mode = True
@@ -336,7 +336,8 @@ class TD3Trainer:
         self.agent = TD3Agent(state_dim=state_dim,
                               action_dim=2,
                               max_action=1.0,
-                              lr=config['actor_lr'],
+                              actor_lr=config['actor_lr'],
+                              critic_lr=config['critic_lr'],
                               actor_hidden_sizes=actor_hidden_sizes,
                               critic_hidden_sizes=critic_hidden_sizes)
         self.replay_buffer = ReplayMemory(config['buffer_size'])
@@ -462,7 +463,8 @@ class TD3Trainer:
                 self._update_past_states_buffer(observation=obs)
             
             # Step environment
-            next_obs, reward, terminated, truncated, info = self.env.step(action, dt=1.0/60.0)
+            dt = 1.0 / self.config.get('physics_fps', 60)  # Use configurable physics frequency
+            next_obs, reward, terminated, truncated, info = self.env.step(action, dt=dt)
             
             # Create augmented next state
             augmented_next_obs = self._get_augmented_state(next_obs)
@@ -520,7 +522,8 @@ class TD3Trainer:
                     self.env.render()
                     pygame.display.flip()
                     # Control frame rate during rendering
-                    pygame.time.wait(16)  # ~60 FPS
+                    physics_fps = self.config.get('physics_fps', 60)
+                    pygame.time.wait(int(1000 / physics_fps))  # Match physics FPS
             
             obs = next_obs
             
