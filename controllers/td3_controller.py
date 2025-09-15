@@ -379,6 +379,9 @@ class TD3Trainer:
         # Periodic checkpointing
         self.save_every_episodes = int(config.get('save_every_episodes', 0) or 0)
         
+        # Graceful shutdown flag
+        self.shutdown_requested = False
+        
     def train(self):
         """Main training loop."""
         print("Starting TD3 training...")
@@ -391,6 +394,9 @@ class TD3Trainer:
             if max_episodes and self.episode_num >= max_episodes:
                 break
             if max_steps and self.total_steps >= max_steps:
+                break
+            if self.shutdown_requested:
+                print("Training stopped by user request")
                 break
             
             episode_reward, episode_steps, episode_distance = self._run_episode()
@@ -417,13 +423,15 @@ class TD3Trainer:
             # Save best model if new best reward achieved
             self._save_best_model(episode_reward, self.episode_num)
             
+            # Save metrics after every episode to avoid data loss
+            self._save_metrics()
+            
             # Periodic checkpoint save
             if self.save_every_episodes > 0 and (self.episode_num % self.save_every_episodes == 0):
                 self._save_checkpoint(self.episode_num)
         
-        # Save final model and metrics
+        # Save final model (metrics already saved after each episode)
         self._save_final_model()
-        self._save_metrics()
         
         print(f"Training completed! Total episodes: {self.episode_num}, Total steps: {self.total_steps}")
     
@@ -516,6 +524,10 @@ class TD3Trainer:
                         elif event.key == pygame.K_h:
                             self.render = not self.render
                             print(f"Rendering: {'ON' if self.render else 'OFF'}")
+                        elif event.key == pygame.K_q:
+                            print("Graceful shutdown requested (Q pressed)...")
+                            self.shutdown_requested = True
+                            return episode_reward, episode_steps, episode_distance  # Exit current episode
                 
                 # Only render if currently enabled
                 if self.render:
@@ -643,7 +655,7 @@ class TD3Trainer:
         return False
     
     def _save_metrics(self):
-        """Save training metrics to CSV."""
+        """Save training metrics to CSV (overwrites previous file)."""
         metrics_path = self.save_dir / "metrics.csv"
         
         with open(metrics_path, 'w', newline='') as csvfile:
@@ -654,4 +666,6 @@ class TD3Trainer:
             for metrics in self.metrics:
                 writer.writerow(metrics)
         
-        print(f"✓ Metrics saved to {metrics_path}")
+        # Only print confirmation periodically to avoid spam
+        if self.episode_num % 50 == 0 or self.shutdown_requested:
+            print(f"✓ Metrics saved to {metrics_path}")

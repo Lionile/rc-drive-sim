@@ -23,7 +23,7 @@ critic_hidden_sizes: [400, 300]  # Both critics will share this architecture
 
 # Past states for temporal awareness
 past_states:
-  enabled: false  # Enable past state augmentation
+  enabled: true  # Enable past state augmentation
   source: "wheels"  # "wheels" or "sensors" - wheel outputs are more concise 
   count: 8  # Number of past states to include
   stride: 5  # Stride between past states (e.g., t-3, t-6, t-9, t-12 if stride=3)
