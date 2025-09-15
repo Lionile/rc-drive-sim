@@ -309,6 +309,12 @@ class TD3Trainer:
         self.noise_clip = config['noise_clip']
         self.warmup_steps = config['warmup_steps']
         
+        # Epsilon-greedy exploration decay
+        self.epsilon_start = config.get('epsilon_start', 0.3)
+        self.epsilon_end = config.get('epsilon_end', 0.05)
+        self.max_episodes = config.get('episodes', 1000)
+        self.epsilon_decay = (self.epsilon_start - self.epsilon_end) / self.max_episodes if self.max_episodes > 0 else 0
+        
         # Past states configuration
         self.past_states_config = config.get('past_states', {})
         self.past_states_enabled = self.past_states_config.get('enabled', False)
@@ -416,9 +422,10 @@ class TD3Trainer:
             
             # Print progress
             if self.episode_num % 10 == 0:
+                current_epsilon = self._get_current_epsilon()
                 print(f"Episode {self.episode_num}: Reward={episode_reward:.2f}, "
                       f"Steps={episode_steps}, Distance={episode_distance:.2f}, "
-                      f"Avg Speed={avg_speed:.2f}")
+                      f"Avg Speed={avg_speed:.2f}, Epsilon={current_epsilon:.3f}")
             
             # Save best model if new best reward achieved
             self._save_best_model(episode_reward, self.episode_num)
@@ -435,6 +442,13 @@ class TD3Trainer:
         
         print(f"Training completed! Total episodes: {self.episode_num}, Total steps: {self.total_steps}")
     
+    def _get_current_epsilon(self):
+        """Calculate current epsilon value based on episode number (linear decay)."""
+        if self.episode_num >= self.max_episodes:
+            return self.epsilon_end
+        current_epsilon = self.epsilon_start - (self.epsilon_decay * self.episode_num)
+        return max(current_epsilon, self.epsilon_end)  # Ensure we don't go below epsilon_end
+        
     def _run_episode(self):
         """Run a single episode and collect experience."""
         obs = self.env.reset()
@@ -443,7 +457,7 @@ class TD3Trainer:
         episode_steps = 0
         episode_distance = 0
         prev_pos = None
-        epsilon = self.config.get('epsilon', 0.1)  # small probability of random action
+        epsilon = self._get_current_epsilon()  # Linear decay from epsilon_start to epsilon_end
 
         while True:
             # Create augmented state for policy input

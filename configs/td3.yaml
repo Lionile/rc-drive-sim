@@ -6,24 +6,28 @@ batch_size: 256
 gamma: 0.99
 tau: 0.005
 actor_lr: 0.001
-critic_lr: 0.001
-noise_sigma: 0.3
-noise_clip: 0.7
+critic_lr: 0.003
+noise_sigma: 0.2
+noise_clip: 0.5
 policy_delay: 2
 warmup_steps: 1000
 save_every_episodes: 10  # Save a checkpoint every N episodes (0 to disable)
 
+# Epsilon-greedy exploration decay
+epsilon_start: 0.3  # Starting epsilon value for exploration
+epsilon_end: 0.05   # Final epsilon value (reached at max episodes)
+
 # Environment settings
-map: 6
+map: 3
 physics_fps: 50  # Physics simulation frequency (Hz) - affects dt calculations
 
 # Network architecture (hidden layer sizes)
-actor_hidden_sizes: [64, 64]   # e.g., [32, 32] means input -> 32 -> 32 -> output
+actor_hidden_sizes: [256, 256]   # e.g., [32, 32] means input -> 32 -> 32 -> output
 critic_hidden_sizes: [400, 300]  # Both critics will share this architecture
 
 # Past states for temporal awareness
 past_states:
   enabled: true  # Enable past state augmentation
-  source: "wheels"  # "wheels" or "sensors" - wheel outputs are more concise 
-  count: 8  # Number of past states to include
-  stride: 5  # Stride between past states (e.g., t-3, t-6, t-9, t-12 if stride=3)
+  source: "sensors"  # "wheels" or "sensors" - wheel outputs are more concise 
+  count: 4  # Number of past states to include
+  stride: 10  # Stride between past states (e.g., t-3, t-6, t-9, t-12 if stride=3)

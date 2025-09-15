@@ -68,6 +68,7 @@ class Environment:
         self.prev_heading = None
         self._last_dt = 1.0/60.0
         self.last_reward = 0.0  # Track last reward for display
+        self.last_reward_components = {}  # Track individual reward components
         
         # Cache for sensor readings to avoid multiple calculations per frame
         self._sensor_cache = {
@@ -262,8 +263,20 @@ class Environment:
     
     def calculate_reward(self, collision):
         """Calculate reward for current step."""
+        # Initialize reward components dictionary
+        reward_components = {
+            'collision': 0.0,
+            'forward_progress': 0.0,
+            'heading_penalty': 0.0,
+            'proximity_penalty': 0.0
+        }
+        
         if collision:
-            return -100.0
+            reward_components['collision'] = -100.0
+            total_reward = sum(reward_components.values())
+            self.last_reward_components = reward_components
+            return total_reward
+            
         # Signed forward progress: project displacement onto heading vector
         current_pos = self.car.get_position()
         if self.prev_position is not None:
@@ -271,8 +284,9 @@ class Environment:
             dy = current_pos[1] - self.prev_position[1]
             heading = self.car.get_heading()
             forward_progress = dx * math.cos(heading) + dy * math.sin(heading)
+            reward_components['forward_progress'] = 10.0 * forward_progress
         else:
-            forward_progress = 0.0
+            reward_components['forward_progress'] = 0.0
 
         # Update previous position for next step
         self.prev_position = current_pos
@@ -288,18 +302,21 @@ class Environment:
             excess = max(0.0, abs(dtheta) - delta_allow)
             # Convert excess rotation to an equivalent linear "wobble" distance at half wheelbase
             # and scale with the same factor as forward progress to keep units comparable.
-            heading_penalty = 10.0 * (0.5 * self.car.wheelbase) * excess
+            reward_components['heading_penalty'] = -10.0 * (0.5 * self.car.wheelbase) * excess
         else:
-            heading_penalty = 0.0
+            reward_components['heading_penalty'] = 0.0
 
         # Update previous heading for next step
         self.prev_heading = current_heading
 
         # Proximity penalty based on distance field
-        proximity_penalty = self._calculate_proximity_penalty()
+        # reward_components['proximity_penalty'] = -self._calculate_proximity_penalty()
 
-        # Reward forward motion minus penalties
-        return 10.0 * forward_progress - heading_penalty - proximity_penalty
+        # Calculate total reward and store components for display
+        total_reward = sum(reward_components.values())
+        self.last_reward_components = reward_components
+        
+        return total_reward
     
     def _calculate_proximity_penalty(self):
         """Calculate proximity penalty based on distance field."""
@@ -322,9 +339,9 @@ class Environment:
         safety_threshold = 1.0  # Below this value, start applying penalty (accounting for car width)
         if distance_value < safety_threshold:
             # Quadratic penalty that increases as we get closer to walls
-            penalty_strength = 30.0  # Adjust this to make car more/less "afraid"
+            penalty_strength = 50.0  # Adjust this to make car more/less "afraid"
             normalized_proximity = (safety_threshold - distance_value) / safety_threshold
-            penalty = penalty_strength * (normalized_proximity ** 2)
+            penalty = penalty_strength * (normalized_proximity)
             return penalty
         
         return 0.0
@@ -477,7 +494,13 @@ class Environment:
         # get sensor readings for display (use cached to avoid redundant computation)
         sensor_readings = self._get_cached_sensor_readings()
         info_lines.append(f"Sensors: {[f'{r:.2f}' for r in sensor_readings]}")
-        info_lines.append(f"Last Reward: {self.last_reward:.3f}")
+        
+        # Add reward breakdown
+        info_lines.append(f"Total Reward: {self.last_reward:.3f}")
+        if hasattr(self, 'last_reward_components') and self.last_reward_components:
+            for component, value in self.last_reward_components.items():
+                if value != 0.0:  # Only show non-zero components
+                    info_lines.append(f"  {component.replace('_', ' ').title()}: {value:.3f}")
         
         for i, line in enumerate(info_lines):
             text = self.debug_font.render(line, True, (255, 255, 255))
