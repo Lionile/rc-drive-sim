@@ -272,7 +272,7 @@ class Environment:
         }
         
         if collision:
-            reward_components['collision'] = -100.0
+            reward_components['collision'] = -500.0
             total_reward = sum(reward_components.values())
             self.last_reward_components = reward_components
             return total_reward
@@ -292,17 +292,17 @@ class Environment:
         self.prev_position = current_pos
 
         # Heading-change penalty: allow reasonable turn rate based on car dynamics.
-        # One-wheel-stationary yaw rate (rad/s): omega_allow = max_wheel_speed / wheelbase
+        # One-wheel-stationary yaw rate (rad/s): omega_allow = max_wheel_speed / effective_track_width
         # Allow per-step heading change: delta_allow = omega_allow * dt
         current_heading = self.car.get_heading()
         if self.prev_heading is not None:
             dtheta = math.atan2(math.sin(current_heading - self.prev_heading),
                                  math.cos(current_heading - self.prev_heading))
-            delta_allow = (self.car.max_wheel_speed / self.car.wheelbase) * self._last_dt
+            delta_allow = (self.car.max_wheel_speed / self.car.effective_track_width) * self._last_dt
             excess = max(0.0, abs(dtheta) - delta_allow)
-            # Convert excess rotation to an equivalent linear "wobble" distance at half wheelbase
+            # Convert excess rotation to an equivalent linear "wobble" distance at half effective_track_width
             # and scale with the same factor as forward progress to keep units comparable.
-            reward_components['heading_penalty'] = -10.0 * (0.5 * self.car.wheelbase) * excess
+            reward_components['heading_penalty'] = -10.0 * (0.5 * self.car.effective_track_width) * excess
         else:
             reward_components['heading_penalty'] = 0.0
 
@@ -310,7 +310,7 @@ class Environment:
         self.prev_heading = current_heading
 
         # Proximity penalty based on distance field
-        # reward_components['proximity_penalty'] = -self._calculate_proximity_penalty()
+        reward_components['proximity_penalty'] = -self._calculate_proximity_penalty()
 
         # Calculate total reward and store components for display
         total_reward = sum(reward_components.values())
@@ -339,7 +339,7 @@ class Environment:
         safety_threshold = 1.0  # Below this value, start applying penalty (accounting for car width)
         if distance_value < safety_threshold:
             # Quadratic penalty that increases as we get closer to walls
-            penalty_strength = 50.0  # Adjust this to make car more/less "afraid"
+            penalty_strength = 75.0  # Adjust this to make car more/less "afraid"
             normalized_proximity = (safety_threshold - distance_value) / safety_threshold
             penalty = penalty_strength * (normalized_proximity)
             return penalty
@@ -482,10 +482,12 @@ class Environment:
         
         # car info
         car_x, car_y = self.car.get_position()
+        angular_velocity_dps = math.degrees(self.car.angular_velocity)
         info_lines = [
             f"FPS: {fps:.1f}" if fps else "FPS: --",
             f"Position: ({car_x:.1f}, {car_y:.1f})",
             f"Heading: {math.degrees(self.car.get_heading()):.1f}°",
+            f"Angular Velocity: {angular_velocity_dps:.1f}°/s",
             f"Left Wheel: {self.car.left_wheel_velocity:.2f}",
             f"Right Wheel: {self.car.right_wheel_velocity:.2f}",
             f"Step: {self.current_step}/{self.max_steps}"

@@ -2,3 +2,4 @@
 .env/
 models/
 .vscode/
+exporter/exports

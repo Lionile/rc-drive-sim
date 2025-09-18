@@ -53,6 +53,7 @@ def main():
     parser.add_argument("--total-steps", type=int, help="Total steps to train")
     parser.add_argument("--save-dir", default="models", help="Directory to save models")
     parser.add_argument("--render", action="store_true", help="Render environment during training")
+    parser.add_argument("--seed", type=int, help="Random seed (overrides config)")
     
     args = parser.parse_args()
     
@@ -65,6 +66,13 @@ def main():
     if args.total_steps:
         config['total_steps'] = args.total_steps
         config['episodes'] = None  # Use steps instead of episodes
+    
+    # Set random seed if not specified in config or use command line override
+    if args.seed is not None:
+        config['seed'] = args.seed
+    elif 'seed' not in config:
+        config['seed'] = random.randint(1, 10000)
+        print(f"Using random seed: {config['seed']}")
     
     # Set seeds
     set_seeds(config['seed'])

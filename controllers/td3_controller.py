@@ -170,12 +170,13 @@ class TD3Agent:
 
 
 class TD3Controller(BaseController):
-    def __init__(self, model_path=None):
+    def __init__(self, model_path=None, config=None):
         super().__init__()
         self.agent = None
         self.past_states_enabled = False
         self.past_states_buffer = None
         self.past_states_index = 0
+        self.config = config  # Store config for past states setup
         
         if model_path:
             self.load_model(model_path)
@@ -235,20 +236,42 @@ class TD3Controller(BaseController):
         self.agent.load(model_path)
         self.agent.train_mode(False)  # Set to evaluation mode
         
-        # Auto-detect if past states are needed based on state_dim
+        # Setup past states based on config or auto-detect
         base_state_dim = 3  # sensor readings
         if state_dim > base_state_dim:
             self.past_states_enabled = True
-            # Assume wheels source for simplicity (most common case)
-            past_dim = state_dim - base_state_dim
-            self.past_states_count = past_dim // 2  # 2 values per wheel state
-            self.past_states_stride = 3  # Default stride
-            self.past_states_source = 'wheels'
             
-            # Initialize ring buffer
+            # Use config if available, otherwise auto-detect
+            if self.config and 'past_states' in self.config:
+                past_config = self.config['past_states']
+                self.past_states_source = past_config.get('source', 'wheels')
+                self.past_states_count = past_config.get('count', 4)
+                self.past_states_stride = past_config.get('stride', 3)
+                print(f"✓ Using config past states: source={self.past_states_source}, count={self.past_states_count}, stride={self.past_states_stride}")
+            else:
+                # Fallback auto-detection (less reliable)
+                past_dim = state_dim - base_state_dim
+                if past_dim % 3 == 0:  # Likely sensors: 3 values per sensor state
+                    self.past_states_count = past_dim // 3
+                    self.past_states_source = 'sensors'
+                elif past_dim % 2 == 0:  # Likely wheels: 2 values per wheel state
+                    self.past_states_count = past_dim // 2
+                    self.past_states_source = 'wheels'
+                else:
+                    # Fallback to wheels
+                    self.past_states_count = past_dim // 2
+                    self.past_states_source = 'wheels'
+                self.past_states_stride = 3  # Default stride
+                print(f"⚠ Auto-detected past states (less reliable): count={self.past_states_count}, source={self.past_states_source}")
+            
+            # Initialize ring buffer with correct dimensions
             buffer_size = self.past_states_stride * self.past_states_count + 1
-            self.past_states_buffer = np.zeros((buffer_size, 2), dtype=np.float32)
-            print(f"✓ Auto-detected past states: count={self.past_states_count}, source=wheels")
+            if self.past_states_source == 'wheels':
+                self.past_states_buffer = np.zeros((buffer_size, 2), dtype=np.float32)  # [left_vel, right_vel]
+            elif self.past_states_source == 'sensors':
+                self.past_states_buffer = np.zeros((buffer_size, base_state_dim), dtype=np.float32)  # [sensor1, sensor2, sensor3]
+        else:
+            print("✓ No past states needed (state_dim == base_state_dim)")
         
         print(f"✓ Loaded TD3 model from {model_path} (state_dim={state_dim})")
     

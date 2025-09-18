@@ -19,9 +19,9 @@ class ManualController(BaseController):
         self.right_wheel_vel = 0.0
         
         # Control sensitivity
-        self.acceleration = 3.0  # How fast the car accelerates
-        self.turn_rate = 2.0     # How fast the car turns
-        self.decay_rate = 5.0    # How fast velocities decay when no input
+        self.acceleration = 15.0  # How fast the car accelerates
+        self.turn_rate = 10.0     # How fast the car turns
+        self.decay_rate = 8.0     # How fast velocities decay when no input
         
     def act(self, observation, dt=1.0/60.0):
         """

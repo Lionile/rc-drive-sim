@@ -12,12 +12,40 @@ Usage:
 import pygame
 import sys
 import argparse
+import yaml
+import os
+from pathlib import Path
 from simulation.environment import Environment
 from controllers.manual_controller import ManualController
 from controllers.random_controller import RandomController
 from controllers.ppo_controller import PPOController
 from controllers.td3_controller import TD3Controller
 from controllers.pid_controller import PIDController
+
+def load_model_config(model_path):
+    """
+    Load the config.yaml from the same directory as the model file.
+    
+    Args:
+        model_path: Path to the model file
+        
+    Returns:
+        Config dictionary or None if not found
+    """
+    if not model_path:
+        return None
+        
+    model_dir = Path(model_path).parent
+    config_path = model_dir / "config.yaml"
+    
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        print(f"✓ Loaded model config from {config_path}")
+        return config
+    else:
+        print(f"⚠ No config.yaml found in {model_dir}")
+        return None
 
 def create_controller(controller_type, model_path=None, seed=None):
     """
@@ -40,7 +68,9 @@ def create_controller(controller_type, model_path=None, seed=None):
     elif controller_type == 'ppo':
         return PPOController(model_path=model_path)
     elif controller_type == 'td3':
-        return TD3Controller(model_path=model_path)
+        # Load config from model directory for TD3
+        config = load_model_config(model_path)
+        return TD3Controller(model_path=model_path, config=config)
     else:
         raise ValueError(f"Unknown controller type: {controller_type}")
 

@@ -7,7 +7,7 @@ import pygame
 import math
 
 class DifferentialDriveCar:
-    def __init__(self, x=0, y=0, heading=0, wheelbase=63):  # 63 pixels = 6.3cm
+    def __init__(self, x=0, y=0, heading=0, track_width=63, effective_track_width=47):  # 63 pixels = 6.3cm
         """
         Initialize the differential drive car.
         
@@ -15,22 +15,27 @@ class DifferentialDriveCar:
             x: Initial x position (pixels)
             y: Initial y position (pixels) 
             heading: Initial heading in radians (0 = facing right)
-            wheelbase: Distance between wheels in pixels (63 pixels = 6.3cm)
+            track_width: Distance between wheels in pixels (63 pixels = 6.3cm) - for rendering/collision
+            effective_track_width: Effective distance for angular dynamics in pixels (47 pixels = 4.7cm)
         """
         self.x = x
         self.y = y
         self.heading = heading
-        self.wheelbase = wheelbase
+        self.track_width = track_width
+        self.effective_track_width = effective_track_width
         
         # Wheel velocities (-1 to 1)
         self.left_wheel_velocity = 0.0
         self.right_wheel_velocity = 0.0
         
+        # Angular velocity tracking (rad/s)
+        self.angular_velocity = 0.0
+        
         # Car dimensions for rendering and collision (in pixels)
         # width_px: lateral size (wheel-to-wheel distance) -> 63 px
-        # length_px: longitudinal size (car length) -> 0.8 * wheelbase
-        self.width_px = int(wheelbase)              # lateral (Y-axis in local frame)
-        self.length_px = int(wheelbase * 0.84)       # longitudinal (X-axis in local frame)
+        # length_px: longitudinal size (car length) -> 0.8 * track_width
+        self.width_px = int(track_width)              # lateral (Y-axis in local frame)
+        self.length_px = int(track_width * 0.84)       # longitudinal (X-axis in local frame)
             
         # Maximum wheel speed in pixels/second (1 px = 1 mm)
         # 0.237 m/s = 237 mm/s = 237 px/s
@@ -44,7 +49,7 @@ class DifferentialDriveCar:
         try:
             self.original_sprite = pygame.image.load("sprite_images/Player.png").convert_alpha()
             # Scale sprite to match car dimensions. Assume the sprite faces to the right by default,
-            # so X dimension = car length, Y dimension = car width (wheelbase).
+            # so X dimension = car length, Y dimension = car width (track_width).
             self.original_sprite = pygame.transform.scale(
                 self.original_sprite, (self.length_px, self.width_px)
             )
@@ -81,7 +86,10 @@ class DifferentialDriveCar:
         
         # Differential drive kinematics (unicycle approximation)
         v = (left_speed + right_speed) / 2.0
-        omega = (left_speed - right_speed) / self.wheelbase
+        omega = (left_speed - right_speed) / self.effective_track_width
+        
+        # Store angular velocity for display (rad/s)
+        self.angular_velocity = omega
 
         # Screen coordinates have Y increasing downward. With y-down, decreasing
         # the heading rotates visually to the left; increasing rotates to the right.
@@ -137,6 +145,12 @@ class DifferentialDriveCar:
         sprite_rect.center = (int(self.x), int(self.y))
         return sprite_rect
     
+    def set_effective_track_width(self, value):
+        """Set the effective track width for angular dynamics."""
+        if value <= 1e-6:
+            raise ValueError("Effective track width must be positive and non-zero")
+        self.effective_track_width = value
+    
     def reset(self, x, y, heading):
         """Reset car to initial position and orientation."""
         self.x = x
@@ -144,3 +158,4 @@ class DifferentialDriveCar:
         self.heading = heading
         self.left_wheel_velocity = 0.0
         self.right_wheel_velocity = 0.0
+        self.angular_velocity = 0.0

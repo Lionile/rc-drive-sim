@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import sys
 
 def downsample_path(path, num_points=30):
     path_length = len(path)
@@ -14,20 +15,19 @@ def downsample_path(path, num_points=30):
     
     return downsampled_path
 
-def extract_and_scale_contours(image_path, scale=0.7, epsilon_factor=0.001, plot=False):
+def extract_and_scale_contours(image_path, epsilon_factor=0.001, plot=False):
     """
     Extracts the first contour from an image, simplifies it using the RDP algorithm,
     and scales it by the specified factor.
 
     Args:
         image_path (str): Path to the image file.
-        scale (float): Scaling factor for the contour.
         epsilon_factor (float): Factor to control the simplification level (higher means more simplification).
 
     Returns:
         tuple: A tuple containing two lists of tuples:
             - List of points for the simplified first contour.
-            - List of points for the simplified and scaled contour.
+            - List of points for the simplified contour.
     """
     image = cv2.imread(image_path, cv2.IMREAD_COLOR)
 
@@ -47,27 +47,18 @@ def extract_and_scale_contours(image_path, scale=0.7, epsilon_factor=0.001, plot
     simplified_contour_first = cv2.approxPolyDP(first_contour, epsilon, True)
     simplified_contour_second = cv2.approxPolyDP(second_contour, epsilon, True)
 
-    def scale_polygon(polygon, scale):
-        M = cv2.moments(polygon)
-        if M['m00'] == 0:
-            return polygon
-        cx = int(M['m10'] / M['m00'])
-        cy = int(M['m01'] / M['m00'])
-
-        scaled_polygon = []
-        for point in polygon:
-            x, y = point[0]
-            new_x = int(cx + scale * (x - cx))
-            new_y = int(cy + scale * (y - cy))
-            scaled_polygon.append((new_x, new_y))
-
-        return scaled_polygon
-
     simplified_contour_points_first = [(int(point[0][0]), int(point[0][1])) for point in simplified_contour_first]
     simplified_contour_points_second = [(int(point[0][0]), int(point[0][1])) for point in simplified_contour_second]
 
+    # Ensure contours are closed loops by adding the first point at the end if not already closed
+    if simplified_contour_points_first and simplified_contour_points_first[0] != simplified_contour_points_first[-1]:
+        simplified_contour_points_first.append(simplified_contour_points_first[0])
+    
+    if simplified_contour_points_second and simplified_contour_points_second[0] != simplified_contour_points_second[-1]:
+        simplified_contour_points_second.append(simplified_contour_points_second[0])
+
     start_points = find_green_circle_center(image_path)
-    headings = [3.14, 0, -1.57 ]
+    headings = [3.14]
 
     if plot:
         # Visualize the contours
@@ -135,7 +126,7 @@ def find_green_circle_center(image_path):
     return circles_pos
 
 
-def generate_racing_line(image_path, num_points=100, scale=0.7, epsilon_factor=0.001):
+def generate_racing_line(image_path, num_points=100, epsilon_factor=0.001):
     """
     Generates a racing line (the middle of the track) from an image.
     Extracts contours for the track edges, and finds the center line by projecting perpendiculars from one edge to the other.
@@ -145,7 +136,7 @@ def generate_racing_line(image_path, num_points=100, scale=0.7, epsilon_factor=0
         scale (float): Scaling factor for the contour.
         epsilon_factor (float): Factor to control the simplification level.
     """
-    first_contour, second_contour, start_points, heading = extract_and_scale_contours(image_path, scale, epsilon_factor)
+    first_contour, second_contour, start_points, heading = extract_and_scale_contours(image_path, epsilon_factor)
 
     if not first_contour or not second_contour:
         raise ValueError("Contours could not be extracted from the image.")
@@ -219,28 +210,6 @@ def generate_racing_line(image_path, num_points=100, scale=0.7, epsilon_factor=0
 
 
 
-def visualize_racing_line():
-    image_path = "maps/map_start2.png"  # Replace with your image path
-    racing_line, start_point = generate_racing_line(image_path)
-
-    print("Racing Line Points:", racing_line)
-    print("Start Point:", start_point)
-
-    # Visualize the racing line
-    plt.figure(figsize=(10, 10))
-    plt.imshow(cv2.imread(image_path))
-    x, y = zip(*racing_line)
-    plt.plot(x, y, marker='o', markersize=3, color='red', label='Racing Line')
-    if start_point:
-        plt.scatter(*start_point, color='green', label='Start Point')
-    # Add numbers above each point
-    for idx, (xi, yi) in enumerate(zip(x, y)):
-        plt.text(xi, yi - 5, str(idx), color='blue', fontsize=8, ha='center')
-    plt.legend()
-    plt.axis('off')
-    plt.show()
-
-
 def load_distance_field(map_path):
     """
     Load distance field image corresponding to the given map path.
@@ -274,6 +243,57 @@ def load_distance_field(map_path):
     return None
 
 
+
+def visualize_track_lines(image_path):
+    # Get track edges (contours)
+    first_contour, second_contour, start_points, headings = extract_and_scale_contours(image_path)
+    # Get racing lines
+    racing_lines = generate_racing_line(image_path, num_points=200, epsilon_factor=0.0001)
+    # Load distance field
+    distance_field = load_distance_field(image_path)
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 9))
+
+    # --- Left: Track with edges and racing line ---
+    ax = axes[0]
+    ax.imshow(cv2.imread(image_path))
+    if first_contour:
+        x1, y1 = zip(*first_contour)
+        ax.plot(x1, y1, color='blue', linewidth=2, label='Inner Edge')
+    if second_contour:
+        x2, y2 = zip(*second_contour)
+        ax.plot(x2, y2, color='red', linewidth=2, label='Outer Edge')
+    for i, (racing_line, start_point) in enumerate(racing_lines):
+        x, y = zip(*racing_line)
+        ax.plot(x, y, marker='o', markersize=3, label=f'Racing Line {i+1}')
+        if start_point:
+            ax.scatter(*start_point, label=f'Start Point {i+1}')
+        for idx, (xi, yi) in enumerate(zip(x, y)):
+            ax.text(xi, yi - 5, str(idx), fontsize=8, ha='center')
+    ax.legend(loc='upper left')
+    ax.axis('off')
+    ax.set_title('Track Edges and Racing Lines')
+
+    # --- Right: Distance field ---
+    ax2 = axes[1]
+    if distance_field is not None:
+        ax2.imshow(distance_field, cmap='viridis')
+        ax2.set_title('Distance Field')
+    else:
+        ax2.text(0.5, 0.5, 'Distance field not found', ha='center', va='center', fontsize=16)
+        ax2.set_title('Distance Field')
+    ax2.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+
 # test and plot racing line generation
 if __name__ == "__main__":
-    visualize_racing_line()
+    if len(sys.argv) != 2:
+        print("Usage: python map_utils.py <image_path>")
+        print("Example: python map_utils.py maps/map_start3.png")
+        sys.exit(1)
+    
+    image_path = sys.argv[1]
+    visualize_track_lines(image_path)
