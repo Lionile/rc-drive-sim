@@ -8,7 +8,7 @@ import numpy as np
 import math
 import os
 
-from utils.map_utils import extract_and_scale_contours, generate_racing_line, load_distance_field
+from utils.map_utils_new import prep_mask, edges_from_mask, edge_polylines_from_masks, compute_centerline, distance_fields, create_stylized_track_image, project_and_reorder_centerline
 from utils.geometry import segment_intersection, distance, contour_to_segments
 from simulation.car import DifferentialDriveCar
 from simulation.sensors import SensorArray
@@ -81,52 +81,26 @@ class Environment:
     
     def load_map(self):
         """Load the track map and extract boundaries."""
-        display_path = self.display_map_path
-        if not display_path:
-            # auto-derive from provided map_path
-            dirname, filename = os.path.split(self.map_path)
-            candidate = None
-            if "map_start" in filename:
-                candidate = filename.replace("map_start", "map")
-            elif "map_mask" in filename:
-                candidate = filename.replace("map_mask", "map")
-            # fallback: if no pattern matched, use original
-            display_path = os.path.join(dirname, candidate) if candidate else self.map_path
-            if not os.path.exists(display_path):
-                display_path = self.map_path
         
         # Only load map image for rendering (not needed in headless mode)
         if not self.headless:
-            self.map_image = pygame.image.load(display_path).convert()
+            # Generate stylized track image
+            track_mask_for_stylized, _ = prep_mask(self.map_path)
+            stylized_pil = create_stylized_track_image(track_mask_for_stylized)
+            # Convert PIL to pygame surface
+            stylized_array = np.array(stylized_pil)
+            self.map_image = pygame.surfarray.make_surface(stylized_array.swapaxes(0, 1))
         else:
             self.map_image = None
         
         # map data
-        boundaries_outer, boundaries_inner, start_points, headings = extract_and_scale_contours(self.map_path)
+        track_mask, start_points = prep_mask(self.map_path)
         
-        self.track_boundaries = [boundaries_outer, boundaries_inner]
+        # Get all map data from compute_centerline (includes distance fields and edge polylines)
+        centerline_result = compute_centerline(track_mask, return_edge_polys=True)
         
-        # Convert boundaries to line segments for collision detection
-        self.boundary_segments = []
-        if boundaries_outer:
-            self.boundary_segments.extend(contour_to_segments(boundaries_outer))
-        if boundaries_inner:
-            self.boundary_segments.extend(contour_to_segments(boundaries_inner))
-        
-        self.start_positions = start_points if start_points else [(512, 512)]
-        self.start_headings = headings if headings else [0.0]
-        
-        # Always generate racing line at startup (regardless of show_racing_line flag)
-        # This avoids repeated expensive calculations when toggling visibility
-        try:
-            racing_lines = generate_racing_line(self.map_path)
-            self.racing_lines = racing_lines
-        except Exception as e:
-            print(f"Could not generate racing line: {e}")
-            self.racing_lines = []
-        
-        # Load distance field for proximity calculations
-        self.distance_field = load_distance_field(self.map_path)
+        # Extract distance field from compute_centerline results
+        self.distance_field = centerline_result.get('dist_u8')
         if self.distance_field is not None:
             print(f"✓ Loaded distance field: {self.distance_field.shape}")
             # Precompute heatmap visualization surface
@@ -134,19 +108,51 @@ class Environment:
         else:
             print("⚠ No distance field found - proximity penalties disabled")
             self.distance_heatmap_surface = None
+        
+        # Extract track boundaries from compute_centerline results
+        boundaries_outer = centerline_result.get('outer_poly')
+        boundaries_inner = centerline_result.get('inner_poly')
+        self.track_boundaries = [boundaries_outer, boundaries_inner]
+        
+        # Convert boundaries to line segments for collision detection
+        self.boundary_segments = []
+        if boundaries_outer is not None and len(boundaries_outer) > 0:
+            self.boundary_segments.extend(contour_to_segments(boundaries_outer))
+        if boundaries_inner is not None and len(boundaries_inner) > 0:
+            self.boundary_segments.extend(contour_to_segments(boundaries_inner))
+        
+        self.start_positions = start_points if start_points else [(512, 512)]
+        self.start_headings = [math.pi] * len(self.start_positions)  # Default headings
+        
+        # Always generate racing line at startup (regardless of show_racing_line flag)
+        # This avoids repeated expensive calculations when toggling visibility
+        try:
+            if 'centerline' in centerline_result and centerline_result['centerline'] is not None:
+                # Project start point onto centerline and reorder to start from there
+                ordered_centerline, proj_pt, seg_idx, t, dist2 = project_and_reorder_centerline(
+                    centerline_result['centerline'],
+                    np.array(self.start_positions[0]) if self.start_positions else np.array([512, 512])
+                )
+                
+                # Detect car heading and adjust centerline direction if needed
+                ordered_centerline = self._adjust_centerline_direction(ordered_centerline, proj_pt, seg_idx)
+                
+                # Format as expected by render function: list of (racing_line, start_point) tuples
+                self.racing_lines = [(ordered_centerline, proj_pt)]
+            else:
+                self.racing_lines = []
+        except Exception as e:
+            print(f"Could not generate racing line: {e}")
+            self.racing_lines = []
     
     def reset(self):
         """Reset the environment to initial state."""
         # choose a random start position
-        if self.start_positions:
-            start_idx = np.random.randint(len(self.start_positions))
-            start_x, start_y = self.start_positions[start_idx]
-            start_heading = self.start_headings[start_idx] if start_idx < len(self.start_headings) else 0.0
-            # face the opposite direction (rotate by 180 degrees)
-            start_heading = math.atan2(math.sin(start_heading + math.pi), math.cos(start_heading + math.pi))
-        else:
-            start_x, start_y = 200, 200
-            start_heading = 0.0
+        start_idx = np.random.randint(len(self.start_positions))
+        start_x, start_y = self.start_positions[start_idx]
+        start_heading = self.start_headings[start_idx] if start_idx < len(self.start_headings) else 0.0
+        # face the opposite direction (rotate by 180 degrees)
+        start_heading = math.atan2(math.sin(start_heading + math.pi), math.cos(start_heading + math.pi))
         
         self.car.reset(start_x, start_y, start_heading)
         self.current_step = 0
@@ -358,7 +364,13 @@ class Environment:
         rgba_array = np.zeros((height, width, 4), dtype=np.uint8)
         
         # Vectorized colormap generation
-        d = self.distance_field.astype(np.float32)
+        d = self.distance_field.astype(np.float32)/255.0  # Normalize to [0, 1]
+        
+        # Handle invalid values (NaN, inf) that might come from the new distance field computation
+        d = np.nan_to_num(d, nan=1.0, posinf=1.0, neginf=0.0)
+        
+        # Ensure values are clamped to valid range [0, 1]
+        d = np.clip(d, 0.0, 1.0)
         
         # Initialize RGB channels
         r = np.zeros_like(d, dtype=np.uint8)
@@ -416,6 +428,65 @@ class Environment:
         
         return heatmap_surface
     
+    def _adjust_centerline_direction(self, centerline, proj_pt, seg_idx):
+        """
+        Adjust centerline direction to match car's initial heading.
+        
+        Args:
+            centerline: Nx2 array of centerline points starting from proj_pt
+            proj_pt: (x,y) projection point on centerline
+            seg_idx: Index of segment containing the projection
+            
+        Returns:
+            Adjusted centerline array with correct direction
+        """
+        if len(centerline) < 3:
+            return centerline  # Not enough points to determine direction
+            
+        # Get car's initial heading (use the first start heading)
+        car_heading = self.start_headings[0] if self.start_headings else math.pi
+        
+        # Create heading vector from car's heading angle
+        car_dir = np.array([math.cos(car_heading), math.sin(car_heading)])
+        
+        # Find the start point index in the centerline (should be index 0)
+        start_idx = 0
+        
+        # Get points around the start for direction calculation
+        n_points = len(centerline)
+        
+        # Get the next point (forward direction)
+        next_idx = (start_idx + 1) % n_points
+        forward_dir = centerline[next_idx] - centerline[start_idx]
+        forward_dir = forward_dir / np.linalg.norm(forward_dir)  # Normalize
+        
+        # Get the previous point (backward direction) 
+        prev_idx = (start_idx - 1) % n_points
+        backward_dir = centerline[prev_idx] - centerline[start_idx]
+        backward_dir = backward_dir / np.linalg.norm(backward_dir)  # Normalize
+        
+        # Calculate dot products
+        forward_dot = np.dot(car_dir, forward_dir)
+        backward_dot = np.dot(car_dir, backward_dir)
+        
+        # Add some tolerance to avoid flipping on very small differences
+        tolerance = 0.1
+        
+        # If backward direction has significantly smaller dot product, reverse the centerline
+        if backward_dot < forward_dot - tolerance:
+            print(f"Reversing centerline direction (car heading: {math.degrees(car_heading):.1f}°, forward_dot: {forward_dot:.3f}, backward_dot: {backward_dot:.3f})")
+            # Reverse the centerline but keep the start point first
+            reversed_centerline = np.flip(centerline, axis=0)
+            # Rotate so start point is first again
+            start_pos = np.where(np.allclose(reversed_centerline, proj_pt, atol=1e-6))[0]
+            if len(start_pos) > 0:
+                start_pos = start_pos[0]
+                reversed_centerline = np.roll(reversed_centerline, -start_pos, axis=0)
+            return reversed_centerline
+        else:
+            print(f"Keeping centerline direction (car heading: {math.degrees(car_heading):.1f}°, forward_dot: {forward_dot:.3f}, backward_dot: {backward_dot:.3f})")
+            return centerline
+    
     def render(self):
         """Render the environment."""
         if self.headless or self.screen is None:
@@ -433,7 +504,7 @@ class Environment:
         # racing line
         if self.show_racing_line and self.racing_lines:
             for racing_line, start_point in self.racing_lines:
-                if racing_line:
+                if racing_line is not None and len(racing_line) > 0:
                     for i, point in enumerate(racing_line):
                         color = (255, 255 - i * 255 // len(racing_line), 0)
                         pygame.draw.circle(self.screen, color, (int(point[0]), int(point[1])), 2)
