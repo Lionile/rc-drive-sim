@@ -70,6 +70,11 @@ class Environment:
         self.last_reward = 0.0  # Track last reward for display
         self.last_reward_components = {}  # Track individual reward components
         
+        # direction tracking for wrong-way detection
+        self.wrong_direction_steps = 0
+        self.max_wrong_direction_steps = 20
+        self.wrong_direction_penalty = -100.0
+        
         # Cache for sensor readings to avoid multiple calculations per frame
         self._sensor_cache = {
             'readings': None,
@@ -137,29 +142,40 @@ class Environment:
                 # Detect car heading and adjust centerline direction if needed
                 ordered_centerline = self._adjust_centerline_direction(ordered_centerline, proj_pt, seg_idx)
                 
-                # Format as expected by render function: list of (racing_line, start_point) tuples
-                self.racing_lines = [(ordered_centerline, proj_pt)]
+                # Format as expected by render function: racing_line tuple
+                self.racing_line = (ordered_centerline, proj_pt)
             else:
-                self.racing_lines = []
+                self.racing_line = None
         except Exception as e:
             print(f"Could not generate racing line: {e}")
-            self.racing_lines = []
+            self.racing_line = None
     
     def reset(self):
         """Reset the environment to initial state."""
         # choose a random start position
         start_idx = np.random.randint(len(self.start_positions))
         start_x, start_y = self.start_positions[start_idx]
-        start_heading = self.start_headings[start_idx] if start_idx < len(self.start_headings) else 0.0
-        # face the opposite direction (rotate by 180 degrees)
-        start_heading = math.atan2(math.sin(start_heading + math.pi), math.cos(start_heading + math.pi))
         
-        self.car.reset(start_x, start_y, start_heading)
+        # Determine correct heading from centerline direction
+        if self.racing_line and len(self.racing_line[0]) > 1:
+            centerline, start_pt = self.racing_line
+            # Get direction from first two points of centerline
+            direction = centerline[1] - centerline[0]
+            correct_heading = math.atan2(direction[1], direction[0])
+        else:
+            # Fallback to original logic if no racing line
+            start_heading = self.start_headings[start_idx] if start_idx < len(self.start_headings) else 0.0
+            correct_heading = math.atan2(math.sin(start_heading + math.pi), math.cos(start_heading + math.pi))
+        
+        self.car.reset(start_x, start_y, correct_heading)
         self.current_step = 0
         
         # Initialize reward tracking
         self.prev_position = self.car.get_position()
         self.prev_heading = self.car.get_heading()
+        
+        # Reset direction tracking
+        self.wrong_direction_steps = 0
         
         # Invalidate sensor cache since car position changed
         self._sensor_cache['readings'] = None
@@ -195,12 +211,12 @@ class Environment:
         observation = self.get_observation()
         collision = self.check_collision()
         
-        reward = self.calculate_reward(collision)
+        reward, terminate_due_to_wrong_direction = self.calculate_reward(collision)
         self.last_reward = reward  # Store for display
         
         # check episode termination conditions
         self.current_step += 1
-        terminated = collision  # Episode ends due to collision/failure
+        terminated = collision or terminate_due_to_wrong_direction  # Episode ends due to collision or wrong direction
         truncated = self.current_step >= self.max_steps  # Episode ends due to time limit
         
         info = {
@@ -281,7 +297,8 @@ class Environment:
             reward_components['collision'] = -500.0
             total_reward = sum(reward_components.values())
             self.last_reward_components = reward_components
-            return total_reward
+            # Return tuple format: (reward, terminate_due_to_wrong_direction)
+            return total_reward, False
             
         # Signed forward progress: project displacement onto heading vector
         current_pos = self.car.get_position()
@@ -315,39 +332,141 @@ class Environment:
         # Update previous heading for next step
         self.prev_heading = current_heading
 
-        # Proximity penalty based on distance field
-        reward_components['proximity_penalty'] = -self._calculate_proximity_penalty()
+        # Proximity penalty based on distance from centerline
+        reward_components['proximity_penalty'] = -self._calculate_proximity_penalty()*0.75
+
+        # Check car direction relative to centerline
+        if self.racing_line:
+            centerline, _ = self.racing_line
+            car_pos = (current_pos[0], current_pos[1])
+            direction_dot = self._project_heading_to_centerline(car_pos, current_heading, centerline)
+            
+            # If dot product is negative, car is facing wrong direction
+            if direction_dot < 0:
+                self.wrong_direction_steps += 1
+                if self.wrong_direction_steps >= self.max_wrong_direction_steps:
+                    # Big penalty and end episode
+                    reward_components['wrong_direction_penalty'] = self.wrong_direction_penalty
+                    terminated = True  # End episode due to wrong direction
+                else:
+                    reward_components['wrong_direction_penalty'] = 0.0
+            else:
+                # Reset counter when facing correct direction
+                self.wrong_direction_steps = 0
+                reward_components['wrong_direction_penalty'] = 0.0
+        else:
+            reward_components['wrong_direction_penalty'] = 0.0
 
         # Calculate total reward and store components for display
         total_reward = sum(reward_components.values())
         self.last_reward_components = reward_components
         
-        return total_reward
+        # Check if episode should terminate due to wrong direction
+        terminate_due_to_wrong_direction = (self.wrong_direction_steps >= self.max_wrong_direction_steps)
+        
+        return total_reward, terminate_due_to_wrong_direction
+    
+    def _project_point_to_centerline(self, point, centerline):
+        """
+        Project a point onto the centerline and return the distance.
+        
+        Args:
+            point: (x, y) tuple or array
+            centerline: Nx2 array of centerline points
+            
+        Returns:
+            distance: Distance from point to projected point on centerline
+        """
+        if centerline is None or len(centerline) < 2:
+            return float('inf')
+            
+        C = np.asarray(centerline, dtype=float)
+        P = C
+        Q = np.roll(C, -1, axis=0)  # segment ends (wrap around)
+        v = Q - P  # segment vectors
+        s = np.asarray(point, float)
+        
+        # Projection parameter t for each segment (clamped to [0,1])
+        vv = (v[:, 0]**2 + v[:, 1]**2)
+        vv = np.where(vv < 1e-12, 1e-12, vv)  # avoid division by zero
+        t = np.clip(((s[0]-P[:,0])*v[:,0] + (s[1]-P[:,1])*v[:,1]) / vv, 0.0, 1.0)
+        
+        # Projected points on each segment
+        proj = P + t[:, None] * v
+        dist2 = (proj[:, 0] - s[0])**2 + (proj[:, 1] - s[1])**2
+        
+        # Find the minimum distance
+        min_dist2 = np.min(dist2)
+        return np.sqrt(min_dist2)
+    
+    def _project_heading_to_centerline(self, car_pos, car_heading, centerline):
+        """
+        Project car's heading vector onto the centerline to determine direction.
+        
+        Args:
+            car_pos: (x, y) car center position
+            car_heading: angle in radians
+            centerline: Nx2 array of centerline points
+            
+        Returns:
+            dot_product: positive if heading aligns with centerline direction, negative if opposite
+        """
+        if centerline is None or len(centerline) < 2:
+            return 0.0
+            
+        # First project car position onto centerline
+        C = np.asarray(centerline, dtype=float)
+        P = C
+        Q = np.roll(C, -1, axis=0)
+        v = Q - P
+        s = np.asarray(car_pos, float)
+        
+        # Projection parameter t for each segment
+        vv = (v[:, 0]**2 + v[:, 1]**2)
+        vv = np.where(vv < 1e-12, 1e-12, vv)
+        t = np.clip(((s[0]-P[:,0])*v[:,0] + (s[1]-P[:,1])*v[:,1]) / vv, 0.0, 1.0)
+        
+        # Find the closest segment
+        proj = P + t[:, None] * v
+        dist2 = (proj[:, 0] - s[0])**2 + (proj[:, 1] - s[1])**2
+        i = int(np.argmin(dist2))
+        
+        # Get the centerline direction at this segment
+        centerline_dir = v[i]
+        centerline_dir = centerline_dir / np.linalg.norm(centerline_dir)
+        
+        # Get car's heading direction
+        car_dir = np.array([np.cos(car_heading), np.sin(car_heading)])
+        
+        # Calculate dot product
+        dot_product = np.dot(car_dir, centerline_dir)
+        
+        return dot_product
     
     def _calculate_proximity_penalty(self):
-        """Calculate proximity penalty based on distance field."""
-        if self.distance_field is None:
+        """Calculate proximity penalty based on distance from centerline."""
+        if not self.racing_line:
             return 0.0
         
         # Get car center position
         car_x, car_y = self.car.get_position()
+        car_pos = (car_x, car_y)
         
-        # Convert to pixel coordinates (clamp to image bounds)
-        px = int(np.clip(car_x, 0, self.distance_field.shape[1] - 1))
-        py = int(np.clip(car_y, 0, self.distance_field.shape[0] - 1))
+        # Get the centerline
+        centerline, _ = self.racing_line
         
-        # Get distance value (0=wall, 1=safe area)
-        distance_value = self.distance_field[py, px]
+        # Project car position onto centerline and get distance
+        distance_from_centerline = self._project_point_to_centerline(car_pos, centerline)
         
         # Convert to proximity penalty
-        # Higher penalty for lower distance values (closer to walls)
-        # Smooth penalty that ramps up as distance_value decreases
-        safety_threshold = 1.0  # Below this value, start applying penalty (accounting for car width)
-        if distance_value < safety_threshold:
-            # Quadratic penalty that increases as we get closer to walls
-            penalty_strength = 75.0  # Adjust this to make car more/less "afraid"
-            normalized_proximity = (safety_threshold - distance_value) / safety_threshold
-            penalty = penalty_strength * (normalized_proximity)
+        # Higher penalty for larger distance values (farther from centerline)
+        # Start applying penalty when car is more than optimal_distance from centerline
+        optimal_distance = 10.0  # pixels - distance considered "on track"
+        if distance_from_centerline > optimal_distance:
+            # Linear penalty that increases as distance from centerline increases
+            penalty_strength = 2.0  # Adjust this to control penalty severity
+            excess_distance = distance_from_centerline - optimal_distance
+            penalty = penalty_strength * excess_distance
             return penalty
         
         return 0.0
@@ -502,12 +621,12 @@ class Environment:
             self.screen.blit(self.distance_heatmap_surface, (0, 0))
         
         # racing line
-        if self.show_racing_line and self.racing_lines:
-            for racing_line, start_point in self.racing_lines:
-                if racing_line is not None and len(racing_line) > 0:
-                    for i, point in enumerate(racing_line):
-                        color = (255, 255 - i * 255 // len(racing_line), 0)
-                        pygame.draw.circle(self.screen, color, (int(point[0]), int(point[1])), 2)
+        if self.show_racing_line and self.racing_line:
+            racing_line, start_point = self.racing_line
+            if racing_line is not None and len(racing_line) > 0:
+                for i, point in enumerate(racing_line):
+                    color = (255, 255 - i * 255 // len(racing_line), 0)
+                    pygame.draw.circle(self.screen, color, (int(point[0]), int(point[1])), 2)
         
         # car - rotate sprite based on current heading for rendering
         angle_degrees = -math.degrees(self.car.get_heading())
