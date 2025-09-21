@@ -7,26 +7,42 @@ import pygame
 import numpy as np
 import math
 import os
-
-from utils.map_utils_new import prep_mask, edges_from_mask, edge_polylines_from_masks, compute_centerline, distance_fields, create_stylized_track_image, project_and_reorder_centerline
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Union
+from utils.map_utils import prep_mask, edges_from_mask, edge_polylines_from_masks, compute_centerline, distance_fields, create_stylized_track_image, project_and_reorder_centerline
 from utils.geometry import segment_intersection, distance, contour_to_segments
 from simulation.car import DifferentialDriveCar
 from simulation.sensors import SensorArray
 
+@dataclass
+class MapBundle:
+    """Container for all map-specific data."""
+    map_path: str
+    display_map_path: Optional[str]
+    map_image: Optional[pygame.Surface]
+    distance_field: Optional[np.ndarray]
+    distance_heatmap_surface: Optional[pygame.Surface]
+    track_boundaries: List
+    boundary_segments: List
+    start_positions: List[Tuple[float, float]]
+    start_headings: List[float]
+    racing_line: Optional[Tuple[np.ndarray, Tuple[float, float]]]
+
 class Environment:
-    def __init__(self, map_path, window_size=(1024, 1024), show_collision_box=True, 
+    def __init__(self, map_path: Union[str, List[str]], window_size=(1024, 1024), show_collision_box=True, 
                  show_sensors=True, show_racing_line=True, show_track_edges=False, 
-                 show_distance_heatmap=False, display_map_path=None, headless=False):
+                 show_distance_heatmap=False, display_map_path: Optional[Union[str, List[str]]] = None, headless=False):
         """
         Initialize the RC car environment.
         
         Args:
-            map_path: Path to the track map image
+            map_path: Path(s) to the track map image(s) - can be single string or list
             window_size: Pygame window size
             show_collision_box: Whether to show car collision box
             show_sensors: Whether to show sensor rays
             show_racing_line: Whether to show racing line
             show_track_edges: Whether to show track boundary edges
+            display_map_path: Optional display map path(s) - can be single string or list
             headless: If True, skip pygame window creation for faster headless training
         """
         self.window_size = window_size
@@ -48,10 +64,30 @@ class Environment:
             self.screen = None
             self.debug_font = None
         
-        # map and track data
-        self.map_path = map_path
-        self.display_map_path = display_map_path
-        self.load_map()
+        # Handle map paths - convert single string to list for consistency
+        if isinstance(map_path, str):
+            map_paths = [map_path]
+        else:
+            map_paths = map_path
+            
+        # Handle display map paths
+        if display_map_path is None:
+            display_map_paths = [None] * len(map_paths)
+        elif isinstance(display_map_path, str):
+            display_map_paths = [display_map_path] * len(map_paths)
+        else:
+            display_map_paths = display_map_path
+            
+        # Pre-calculate all map bundles
+        self.map_bundles = []
+        for i, (mp, dmp) in enumerate(zip(map_paths, display_map_paths)):
+            print(f"Pre-calculating map {i+1}/{len(map_paths)}: {mp}")
+            bundle = self._create_map_bundle(mp, dmp)
+            self.map_bundles.append(bundle)
+            
+        # Set current map to first one
+        self.current_map_bundle = None
+        self.set_map(0)
         
         # init car
         self.car = DifferentialDriveCar()
@@ -84,71 +120,153 @@ class Environment:
         
         self.reset()
     
-    def load_map(self):
-        """Load the track map and extract boundaries."""
+    def _create_map_bundle(self, map_path: str, display_map_path: Optional[str] = None) -> MapBundle:
+        """Create a MapBundle containing all pre-calculated map data."""
         
         # Only load map image for rendering (not needed in headless mode)
         if not self.headless:
             # Generate stylized track image
-            track_mask_for_stylized, _ = prep_mask(self.map_path)
+            track_mask_for_stylized, _ = prep_mask(map_path)
             stylized_pil = create_stylized_track_image(track_mask_for_stylized)
             # Convert PIL to pygame surface
             stylized_array = np.array(stylized_pil)
-            self.map_image = pygame.surfarray.make_surface(stylized_array.swapaxes(0, 1))
+            map_image = pygame.surfarray.make_surface(stylized_array.swapaxes(0, 1))
         else:
-            self.map_image = None
+            map_image = None
         
         # map data
-        track_mask, start_points = prep_mask(self.map_path)
+        track_mask, start_points = prep_mask(map_path)
         
         # Get all map data from compute_centerline (includes distance fields and edge polylines)
         centerline_result = compute_centerline(track_mask, return_edge_polys=True)
         
         # Extract distance field from compute_centerline results
-        self.distance_field = centerline_result.get('dist_u8')
-        if self.distance_field is not None:
-            print(f"✓ Loaded distance field: {self.distance_field.shape}")
+        distance_field = centerline_result.get('dist_u8')
+        distance_heatmap_surface = None
+        if distance_field is not None and not self.headless:
             # Precompute heatmap visualization surface
-            self.distance_heatmap_surface = self._create_distance_heatmap_surface()
-        else:
-            print("⚠ No distance field found - proximity penalties disabled")
-            self.distance_heatmap_surface = None
+            distance_heatmap_surface = self._create_distance_heatmap_surface_from_field(distance_field)
         
         # Extract track boundaries from compute_centerline results
         boundaries_outer = centerline_result.get('outer_poly')
         boundaries_inner = centerline_result.get('inner_poly')
-        self.track_boundaries = [boundaries_outer, boundaries_inner]
+        track_boundaries = [boundaries_outer, boundaries_inner]
         
         # Convert boundaries to line segments for collision detection
-        self.boundary_segments = []
+        boundary_segments = []
         if boundaries_outer is not None and len(boundaries_outer) > 0:
-            self.boundary_segments.extend(contour_to_segments(boundaries_outer))
+            boundary_segments.extend(contour_to_segments(boundaries_outer))
         if boundaries_inner is not None and len(boundaries_inner) > 0:
-            self.boundary_segments.extend(contour_to_segments(boundaries_inner))
+            boundary_segments.extend(contour_to_segments(boundaries_inner))
         
-        self.start_positions = start_points if start_points else [(512, 512)]
-        self.start_headings = [math.pi] * len(self.start_positions)  # Default headings
+        start_positions = start_points if start_points else [(512, 512)]
+        start_headings = [math.pi] * len(start_positions)  # Default headings
         
-        # Always generate racing line at startup (regardless of show_racing_line flag)
-        # This avoids repeated expensive calculations when toggling visibility
+        # Always generate racing line
+        racing_line = None
         try:
             if 'centerline' in centerline_result and centerline_result['centerline'] is not None:
                 # Project start point onto centerline and reorder to start from there
                 ordered_centerline, proj_pt, seg_idx, t, dist2 = project_and_reorder_centerline(
                     centerline_result['centerline'],
-                    np.array(self.start_positions[0]) if self.start_positions else np.array([512, 512])
+                    np.array(start_positions[0]) if start_positions else np.array([512, 512])
                 )
                 
-                # Detect car heading and adjust centerline direction if needed
-                ordered_centerline = self._adjust_centerline_direction(ordered_centerline, proj_pt, seg_idx)
+                # Note: Direction adjustment will be done when bundle is loaded via set_map
+                # This avoids accessing instance variables during bundle creation
                 
                 # Format as expected by render function: racing_line tuple
-                self.racing_line = (ordered_centerline, proj_pt)
-            else:
-                self.racing_line = None
+                racing_line = (ordered_centerline, proj_pt)
         except Exception as e:
-            print(f"Could not generate racing line: {e}")
+            print(f"Could not generate racing line for {map_path}: {e}")
+        
+        return MapBundle(
+            map_path=map_path,
+            display_map_path=display_map_path,
+            map_image=map_image,
+            distance_field=distance_field,
+            distance_heatmap_surface=distance_heatmap_surface,
+            track_boundaries=track_boundaries,
+            boundary_segments=boundary_segments,
+            start_positions=start_positions,
+            start_headings=start_headings,
+            racing_line=racing_line
+        )
+    
+    def set_map(self, bundle_index: int):
+        """Switch to a different map bundle."""
+        if bundle_index < 0 or bundle_index >= len(self.map_bundles):
+            raise ValueError(f"Invalid bundle index {bundle_index}. Must be between 0 and {len(self.map_bundles)-1}")
+            
+        bundle = self.map_bundles[bundle_index]
+        self.current_map_bundle = bundle
+        
+        # Set all map-specific variables from the bundle
+        self.map_path = bundle.map_path
+        self.display_map_path = bundle.display_map_path
+        self.map_image = bundle.map_image
+        self.distance_field = bundle.distance_field
+        self.distance_heatmap_surface = bundle.distance_heatmap_surface
+        self.track_boundaries = bundle.track_boundaries
+        self.boundary_segments = bundle.boundary_segments
+        self.start_positions = bundle.start_positions
+        self.start_headings = bundle.start_headings
+        
+        # Apply direction adjustment to racing line now that instance variables are set
+        if bundle.racing_line:
+            centerline, proj_pt = bundle.racing_line
+            # Find the segment index for the projected point
+            # This is a simplified approach - we'll use segment 0 as approximation
+            adjusted_centerline = self._adjust_centerline_direction(centerline, proj_pt, 0)
+            self.racing_line = (adjusted_centerline, proj_pt)
+        else:
             self.racing_line = None
+        
+        print(f"✓ Switched to map: {bundle.map_path}")
+    
+    def _create_distance_heatmap_surface_from_field(self, distance_field: np.ndarray) -> Optional[pygame.Surface]:
+        """Create a transparent colored heatmap surface from a distance field."""
+        if distance_field is None or self.headless:
+            return None
+        
+        # Get distance field dimensions
+        height, width = distance_field.shape
+        
+        # Create RGBA array for efficient batch processing
+        rgba_array = np.zeros((height, width, 4), dtype=np.uint8)
+        
+        # Normalize distance field to 0-1 range for coloring
+        if distance_field.max() > distance_field.min():
+            normalized = (distance_field - distance_field.min()) / (distance_field.max() - distance_field.min())
+        else:
+            normalized = np.zeros_like(distance_field)
+        
+        # Create heatmap colors (blue for close, red for far)
+        # Invert so closer distances are more intense
+        intensity = (1.0 - normalized) * 255
+        
+        # Blue channel (close = high, far = low)
+        rgba_array[:, :, 2] = intensity.astype(np.uint8)  # Blue
+        # Red channel (close = low, far = high) 
+        rgba_array[:, :, 0] = (normalized * 255).astype(np.uint8)  # Red
+        # Green channel (medium values)
+        rgba_array[:, :, 1] = (np.abs(normalized - 0.5) * 2 * 255).astype(np.uint8)  # Green
+        
+        # Alpha channel - make it semi-transparent
+        rgba_array[:, :, 3] = 120  # Semi-transparent
+        
+        # Convert to pygame surface (RGB only, no alpha channel)
+        rgb_array = rgba_array[:, :, :3]  # Remove alpha channel for pygame compatibility
+        heatmap_surface = pygame.surfarray.make_surface(rgb_array.swapaxes(0, 1))
+        
+        return heatmap_surface
+    
+    def load_map(self):
+        """Deprecated: Use set_map() instead. This method is kept for backwards compatibility."""
+        if len(self.map_bundles) > 0:
+            self.set_map(0)
+        else:
+            raise RuntimeError("No map bundles available. Environment was not properly initialized.")
     
     def reset(self):
         """Reset the environment to initial state."""
@@ -224,7 +342,9 @@ class Environment:
             'position': self.car.get_position(),
             'heading': self.car.get_heading(),
             'step': self.current_step,
-            'max_steps': self.max_steps
+            'max_steps': self.max_steps,
+            'map_path': self.map_path,
+            'map_index': self.map_bundles.index(self.current_map_bundle) if self.current_map_bundle else 0
         }
         
         return observation, reward, terminated, truncated, info
@@ -593,7 +713,7 @@ class Environment:
         
         # If backward direction has significantly smaller dot product, reverse the centerline
         if backward_dot < forward_dot - tolerance:
-            print(f"Reversing centerline direction (car heading: {math.degrees(car_heading):.1f}°, forward_dot: {forward_dot:.3f}, backward_dot: {backward_dot:.3f})")
+            # print(f"Reversing centerline direction (car heading: {math.degrees(car_heading):.1f}°, forward_dot: {forward_dot:.3f}, backward_dot: {backward_dot:.3f})")
             # Reverse the centerline but keep the start point first
             reversed_centerline = np.flip(centerline, axis=0)
             # Rotate so start point is first again

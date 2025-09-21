@@ -32,17 +32,31 @@ def set_seeds(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def build_env(map_id, render=False):
-    """Build environment for training."""
-    map_path = f"maps/map_start{map_id}.png"
-    env = Environment(
-        map_path=map_path,
-        show_collision_box=render,  # Show collision box if rendering
-        show_sensors=render,        # Show sensors if rendering
-        show_racing_line=False,
-        show_track_edges=False,
-        headless=not render  # Run headless when not rendering
-    )
+def build_env(map_config, render=False):
+    """Build environment for training with support for single map or multiple maps."""
+    # Handle both single map ID and list of map IDs
+    if isinstance(map_config, list):
+        # Multiple maps - create environment with all maps
+        map_paths = [f"maps/map_start{map_id}.png" for map_id in map_config]
+        env = Environment(
+            map_path=map_paths,  # Pass list of map paths
+            show_collision_box=render,
+            show_sensors=render,
+            show_racing_line=False,
+            show_track_edges=False,
+            headless=not render
+        )
+    else:
+        # Single map - backwards compatibility
+        map_path = f"maps/map_start{map_config}.png"
+        env = Environment(
+            map_path=map_path,  # Pass single map path
+            show_collision_box=render,
+            show_sensors=render,
+            show_racing_line=False,
+            show_track_edges=False,
+            headless=not render
+        )
     return env
 
 

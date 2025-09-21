@@ -34,6 +34,7 @@ def load_actor_and_config(model_path):
     max_action = checkpoint.get('max_action', 1.0)
     actor_hidden_sizes = checkpoint.get('actor_hidden_sizes', [64, 64])
     critic_hidden_sizes = checkpoint.get('critic_hidden_sizes', [400, 300])
+    allow_reverse = checkpoint.get('allow_reverse', True)  # Default to True for backward compatibility
     
     # Create agent with correct dimensions
     agent = TD3Agent(
@@ -42,6 +43,7 @@ def load_actor_and_config(model_path):
         max_action=max_action,
         actor_hidden_sizes=actor_hidden_sizes,
         critic_hidden_sizes=critic_hidden_sizes,
+        allow_reverse=allow_reverse,
         actor_lr=0.001,  # Not used for export
         critic_lr=0.001   # Not used for export
     )
@@ -50,7 +52,7 @@ def load_actor_and_config(model_path):
     agent.load(model_path)
     actor = agent.actor.eval()
     
-    return actor, config, max_action, state_dim, action_dim
+    return actor, config, max_action, state_dim, action_dim, allow_reverse
 
 def extract_layers_from_actor(actor):
     """Extract weight matrices and biases from the actor network."""
@@ -95,7 +97,7 @@ def format_array_cpp(arr, indent=2):
     else:
         raise ValueError(f"Unsupported array dimension: {arr.ndim}")
 
-def generate_cpp_header(layers, config, max_action, state_dim, action_dim):
+def generate_cpp_header(layers, config, max_action, state_dim, action_dim, allow_reverse):
     """Generate C++ header code with the network weights."""
     
     # Start building the header
@@ -109,6 +111,7 @@ def generate_cpp_header(layers, config, max_action, state_dim, action_dim):
         f"static const int ACTOR_OUTPUT_DIM = {action_dim};",
         f"static const int ACTOR_NUM_LAYERS = {len(layers)};",
         f"static const float ACTOR_MAX_ACTION = {max_action:.6f}f;",
+        f"static const bool ACTOR_ALLOW_REVERSE = {str(allow_reverse).lower()};",
         ""
     ]
     
@@ -169,7 +172,7 @@ def main():
     try:
         # Load the model and configuration
         print(f"Loading model: {args.model}")
-        actor, config, max_action, state_dim, action_dim = load_actor_and_config(args.model)
+        actor, config, max_action, state_dim, action_dim, allow_reverse = load_actor_and_config(args.model)
         
         # Extract layers
         print(f"Extracting layers from actor...")
@@ -179,6 +182,7 @@ def main():
         print(f"  Input dim: {state_dim}")
         print(f"  Output dim: {action_dim}")
         print(f"  Max action: {max_action}")
+        print(f"  Allow reverse: {allow_reverse}")
         print(f"  Layers: {len(layers)}")
         for i, layer in enumerate(layers):
             out_dim, in_dim = layer['weight'].shape
@@ -186,7 +190,7 @@ def main():
         
         # Generate C++ header
         print(f"Generating C++ header...")
-        cpp_header = generate_cpp_header(layers, config, max_action, state_dim, action_dim)
+        cpp_header = generate_cpp_header(layers, config, max_action, state_dim, action_dim, allow_reverse)
         
         # Determine output path
         if args.output:

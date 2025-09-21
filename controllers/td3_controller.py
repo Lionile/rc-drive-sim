@@ -19,7 +19,7 @@ from utils.geometry import distance
 
 # Neural Networks
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_action, hidden_sizes=None):
+    def __init__(self, state_dim, action_dim, max_action, hidden_sizes=None, allow_reverse=True):
         super(Actor, self).__init__()
         if hidden_sizes is None:
             hidden_sizes = [64, 64]
@@ -34,12 +34,19 @@ class Actor(nn.Module):
         self.out = nn.Linear(last_dim, action_dim)
 
         self.max_action = max_action
+        self.allow_reverse = allow_reverse
 
     def forward(self, state):
         a = state
         for layer in self.hidden_layers:
             a = F.relu(layer(a))
-        return self.max_action * torch.tanh(self.out(a))
+        action = self.max_action * torch.tanh(self.out(a))
+        
+        if not self.allow_reverse:
+            # Scale from [-1, 1] to [0, 1] when reverse is not allowed
+            action = (action + 1.0) / 2.0
+        
+        return action
 
 
 class Critic(nn.Module):
@@ -93,7 +100,7 @@ class Critic(nn.Module):
 
 class TD3Agent:
     def __init__(self, state_dim=3, action_dim=2, max_action=1.0, actor_lr=3e-4, critic_lr=3e-4,
-                 actor_hidden_sizes=None, critic_hidden_sizes=None):
+                 actor_hidden_sizes=None, critic_hidden_sizes=None, allow_reverse=True):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.state_dim = state_dim  # Store for checkpointing
         self.action_dim = action_dim
@@ -102,8 +109,8 @@ class TD3Agent:
         self.actor_hidden_sizes = actor_hidden_sizes if actor_hidden_sizes is not None else [64, 64]
         self.critic_hidden_sizes = critic_hidden_sizes if critic_hidden_sizes is not None else [400, 300]
 
-        self.actor = Actor(state_dim, action_dim, max_action, hidden_sizes=self.actor_hidden_sizes).to(self.device)
-        self.actor_target = Actor(state_dim, action_dim, max_action, hidden_sizes=self.actor_hidden_sizes).to(self.device)
+        self.actor = Actor(state_dim, action_dim, max_action, hidden_sizes=self.actor_hidden_sizes, allow_reverse=allow_reverse).to(self.device)
+        self.actor_target = Actor(state_dim, action_dim, max_action, hidden_sizes=self.actor_hidden_sizes, allow_reverse=allow_reverse).to(self.device)
         self.actor_target.load_state_dict(self.actor.state_dict())
         self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=actor_lr)
 
@@ -113,6 +120,7 @@ class TD3Agent:
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_lr)
         
         self.max_action = max_action
+        self.allow_reverse = allow_reverse
         self.training_mode = True
         
     def act(self, state, deterministic=False):
@@ -121,7 +129,12 @@ class TD3Agent:
         action = self.actor(state).cpu().data.numpy().flatten()
         # NOTE: No exploration noise here. Exploration is handled in the Trainer
         # to avoid double-noise and to keep inference behavior clean.
-        return np.clip(action, -self.max_action, self.max_action)
+        
+        if not self.allow_reverse:
+            # When reverse is not allowed, action is already in [0, 1] range
+            return np.clip(action, 0.0, self.max_action)
+        else:
+            return np.clip(action, -self.max_action, self.max_action)
     
     def train_mode(self, mode=True):
         """Set training or evaluation mode."""
@@ -139,6 +152,7 @@ class TD3Agent:
             'state_dim': self.state_dim,
             'action_dim': self.action_dim,
             'max_action': self.max_action,
+            'allow_reverse': self.allow_reverse,
             'actor_hidden_sizes': self.actor_hidden_sizes,
             'critic_hidden_sizes': self.critic_hidden_sizes,
         }, filename)
@@ -158,6 +172,9 @@ class TD3Agent:
             raise ValueError(f"Actor architecture mismatch: expected {self.actor_hidden_sizes}, got {ckpt_actor_sizes}. Construct agent with matching sizes.")
         if ckpt_critic_sizes is not None and ckpt_critic_sizes != self.critic_hidden_sizes:
             raise ValueError(f"Critic architecture mismatch: expected {self.critic_hidden_sizes}, got {ckpt_critic_sizes}. Construct agent with matching sizes.")
+        
+        # Load allow_reverse setting (default to True for backward compatibility)
+        self.allow_reverse = checkpoint.get('allow_reverse', True)
         
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
@@ -190,7 +207,8 @@ class TD3Controller(BaseController):
             dt: Time delta for physics update (not used by TD3)
             
         Returns:
-            [left_wheel_velocity, right_wheel_velocity] in range [-1, 1]
+            [left_wheel_velocity, right_wheel_velocity] in range [-1, 1] if allow_reverse=True, 
+            or [0, 1] if allow_reverse=False
         """
         if self.agent is None:
             return [0.0, 0.0]
@@ -215,8 +233,11 @@ class TD3Controller(BaseController):
             else:
                 self._update_past_states_buffer(observation=observation)
         
-        # Clamp to [-1, 1] range
-        action = np.clip(action, -1.0, 1.0)
+        # Clamp to appropriate range based on allow_reverse setting
+        if hasattr(self.agent, 'allow_reverse') and not self.agent.allow_reverse:
+            action = np.clip(action, 0.0, 1.0)
+        else:
+            action = np.clip(action, -1.0, 1.0)
         
         return action.tolist()
     
@@ -229,10 +250,12 @@ class TD3Controller(BaseController):
         max_action = checkpoint.get('max_action', 1.0)
         actor_hidden_sizes = checkpoint.get('actor_hidden_sizes', [64, 64])
         critic_hidden_sizes = checkpoint.get('critic_hidden_sizes', [400, 300])
+        allow_reverse = checkpoint.get('allow_reverse', True)  # Default to True for backward compatibility
         
         # Create agent with correct dimensions
         self.agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, max_action=max_action,
-                               actor_hidden_sizes=actor_hidden_sizes, critic_hidden_sizes=critic_hidden_sizes)
+                               actor_hidden_sizes=actor_hidden_sizes, critic_hidden_sizes=critic_hidden_sizes,
+                               allow_reverse=allow_reverse)
         self.agent.load(model_path)
         self.agent.train_mode(False)  # Set to evaluation mode
         
@@ -328,8 +351,18 @@ class TD3Trainer:
         self.gamma = config['gamma']
         self.tau = config['tau']
         self.policy_delay = config['policy_delay']
-        self.noise_sigma = config['noise_sigma']
-        self.noise_clip = config['noise_clip']
+        
+        # Separate noise parameters for exploration and target policy smoothing
+        self.explore_sigma_start = config.get('explore_sigma_start', 0.2)
+        self.explore_sigma_end = config.get('explore_sigma_end', 0.05)
+        self.explore_clip = config.get('explore_clip', 0.5)
+        self.smooth_sigma = config.get('smooth_sigma', 0.2)
+        self.smooth_clip = config.get('smooth_clip', 0.5)
+        
+        # Exploration sigma decay (similar to epsilon decay)
+        self.max_episodes = config.get('episodes', 1000)
+        self.explore_sigma_decay = (self.explore_sigma_start - self.explore_sigma_end) / self.max_episodes if self.max_episodes > 0 else 0
+        
         self.warmup_steps = config['warmup_steps']
         
         # Epsilon-greedy exploration decay
@@ -360,16 +393,17 @@ class TD3Trainer:
         # Network architecture from config (with sensible defaults and backward compatibility)
         actor_hidden_sizes = config.get('actor_hidden_sizes', [64, 64])
         critic_hidden_sizes = config.get('critic_hidden_sizes', [400, 300])
+        allow_reverse = config.get('allow_reverse', True)
 
-        # Initialize agent and replay buffer
+        # Initialize agent
         self.agent = TD3Agent(state_dim=state_dim,
                               action_dim=2,
                               max_action=1.0,
                               actor_lr=config['actor_lr'],
                               critic_lr=config['critic_lr'],
                               actor_hidden_sizes=actor_hidden_sizes,
-                              critic_hidden_sizes=critic_hidden_sizes)
-        self.replay_buffer = ReplayMemory(config['buffer_size'])
+                              critic_hidden_sizes=critic_hidden_sizes,
+                              allow_reverse=allow_reverse)
         
         # Training state
         self.total_steps = 0
@@ -401,6 +435,7 @@ class TD3Trainer:
         
         # Best model tracking
         self.best_reward = float('-inf')  # Track highest reward achieved
+        self.recent_rewards = []  # Store recent episode rewards for rolling average calculation
         
         # Metrics tracking
         self.metrics = []
@@ -408,8 +443,36 @@ class TD3Trainer:
         # Periodic checkpointing
         self.save_every_episodes = int(config.get('save_every_episodes', 0) or 0)
         
+        # Multi-map training support
+        self.map_config = config.get('map', [])
+        if isinstance(self.map_config, list):
+            self.multi_map_enabled = True
+            self.available_maps = self.map_config
+            self.current_map_index = 0  # Track current position in cycle
+            print(f"✓ Multi-map training enabled with {len(self.available_maps)} maps: {self.available_maps}")
+        else:
+            self.multi_map_enabled = False
+            self.available_maps = [self.map_config]
+            self.current_map_index = 0
+            print(f"✓ Single map training: {self.map_config}")
+        
+        # Create per-map replay buffers
+        self.replay_buffers = [ReplayMemory(config['buffer_size']) for _ in self.available_maps]
+        self.num_maps = len(self.available_maps)
+        
         # Graceful shutdown flag
         self.shutdown_requested = False
+    
+    def _select_next_map(self):
+        """Select the next map in cyclic order for multi-map training."""
+        if self.multi_map_enabled:
+            # Get current bundle index from cycle
+            bundle_index = self.current_map_index
+            # Advance to next map in cycle
+            self.current_map_index = (self.current_map_index + 1) % len(self.available_maps)
+            return bundle_index
+        else:
+            return 0  # Single map case
         
     def train(self):
         """Main training loop."""
@@ -443,12 +506,16 @@ class TD3Trainer:
             }
             self.metrics.append(metrics)
             
+            # Store episode reward for rolling average calculation
+            self.recent_rewards.append(episode_reward)
+            
             # Print progress
             if self.episode_num % 10 == 0:
                 current_epsilon = self._get_current_epsilon()
+                current_sigma = self._get_current_explore_sigma()
                 print(f"Episode {self.episode_num}: Reward={episode_reward:.2f}, "
                       f"Steps={episode_steps}, Distance={episode_distance:.2f}, "
-                      f"Avg Speed={avg_speed:.2f}, Epsilon={current_epsilon:.3f}")
+                      f"Avg Speed={avg_speed:.2f}, Epsilon={current_epsilon:.3f}, Sigma={current_sigma:.3f}")
             
             # Save best model if new best reward achieved
             self._save_best_model(episode_reward, self.episode_num)
@@ -472,8 +539,24 @@ class TD3Trainer:
         current_epsilon = self.epsilon_start - (self.epsilon_decay * self.episode_num)
         return max(current_epsilon, self.epsilon_end)  # Ensure we don't go below epsilon_end
         
+    def _get_current_explore_sigma(self):
+        """Calculate current explore_sigma value based on episode number (linear decay)."""
+        if self.episode_num >= self.max_episodes:
+            return self.explore_sigma_end
+        current_sigma = self.explore_sigma_start - (self.explore_sigma_decay * self.episode_num)
+        return max(current_sigma, self.explore_sigma_end)  # Ensure we don't go below explore_sigma_end
+        
     def _run_episode(self):
         """Run a single episode and collect experience."""
+        # Select next map for multi-map training (cyclic order)
+        if self.multi_map_enabled:
+            selected_map = self._select_next_map()
+            self.env.set_map(selected_map)
+            if self.episode_num % 10 == 0:  # Log map selection every 10 episodes
+                print(f"Episode {self.episode_num + 1}: Using map {selected_map}")
+        else:
+            selected_map = 0  # Single map case
+        
         obs = self.env.reset()
         self._reset_past_states_buffer()  # Reset past states buffer at episode start
         episode_reward = 0
@@ -489,18 +572,29 @@ class TD3Trainer:
             # Get action
             if self.total_steps < self.warmup_steps:
                 # Random actions during warmup
-                action = np.random.uniform(-1, 1, 2)
+                if not self.agent.allow_reverse:
+                    action = np.random.uniform(0, 1, 2)
+                else:
+                    action = np.random.uniform(-1, 1, 2)
             else:
                 # Epsilon-greedy: sometimes take a random action to encourage turning
                 if np.random.rand() < epsilon:
-                    action = np.random.uniform(-1, 1, 2)
+                    if not self.agent.allow_reverse:
+                        action = np.random.uniform(0, 1, 2)
+                    else:
+                        action = np.random.uniform(-1, 1, 2)
                 else:
                     # Policy action (deterministic), then add Gaussian exploration noise
                     action = self.agent.act(augmented_obs, deterministic=True)
-                    noise = np.random.normal(0, self.noise_sigma, size=action.shape)
-                    noise = np.clip(noise, -self.noise_clip, self.noise_clip)
-                    action = np.clip(action + noise, -1, 1)
-            
+                    current_sigma = self._get_current_explore_sigma()
+                    noise = np.random.normal(0, current_sigma, size=action.shape)
+                    noise = np.clip(noise, -self.explore_clip, self.explore_clip)
+                    if not self.agent.allow_reverse:
+                        # When reverse is not allowed, action is in [0, 1]
+                        action = np.clip(action + noise, 0, 1)
+                    else:
+                        action = np.clip(action + noise, -1, 1)
+
             # Update past states buffer with current action or observation
             if self.past_states_source == 'wheels':
                 self._update_past_states_buffer(action=action)
@@ -526,7 +620,7 @@ class TD3Trainer:
             
             # Store transition in replay buffer (use augmented states)
             done = terminated or truncated
-            self.replay_buffer.push(
+            self.replay_buffers[selected_map].push(
                 torch.FloatTensor(augmented_obs),
                 torch.FloatTensor(action),
                 torch.FloatTensor(augmented_next_obs),
@@ -535,7 +629,8 @@ class TD3Trainer:
             )
             
             # Train agent if enough experience and past warmup
-            if len(self.replay_buffer) > self.batch_size and self.total_steps > self.warmup_steps:
+            total_samples = sum(len(buffer) for buffer in self.replay_buffers)
+            if total_samples > self.batch_size and self.total_steps > self.warmup_steps:
                 self._update_agent()
             
             # Handle pygame events for toggling visibility (always process events if rendering was initially enabled)
@@ -583,8 +678,41 @@ class TD3Trainer:
     
     def _update_agent(self):
         """Update TD3 agent with a batch of experience."""
-        # Sample batch from replay buffer
-        state_batch, action_batch, reward_batch, next_state_batch, done_batch = self.replay_buffer.sample(self.batch_size)
+        # Sample proportionally from each map's replay buffer
+        samples_per_buffer = round(self.batch_size / self.num_maps)
+        
+        all_state_batches = []
+        all_action_batches = []
+        all_reward_batches = []
+        all_next_state_batches = []
+        all_done_batches = []
+        
+        for buffer in self.replay_buffers:
+            if len(buffer) >= samples_per_buffer:
+                # Sample the full amount from this buffer
+                sample_size = samples_per_buffer
+            else:
+                # Sample all available from this buffer
+                sample_size = len(buffer)
+            
+            if sample_size > 0:
+                state_batch, action_batch, reward_batch, next_state_batch, done_batch = buffer.sample(sample_size)
+                all_state_batches.append(state_batch)
+                all_action_batches.append(action_batch)
+                all_reward_batches.append(reward_batch)
+                all_next_state_batches.append(next_state_batch)
+                all_done_batches.append(done_batch)
+        
+        # Concatenate all samples
+        if all_state_batches:
+            state_batch = torch.cat(all_state_batches, dim=0)
+            action_batch = torch.cat(all_action_batches, dim=0)
+            reward_batch = torch.cat(all_reward_batches, dim=0)
+            next_state_batch = torch.cat(all_next_state_batches, dim=0)
+            done_batch = torch.cat(all_done_batches, dim=0)
+        else:
+            # Fallback if no samples available (shouldn't happen in practice)
+            return
         
         state_batch = state_batch.to(self.agent.device)
         action_batch = action_batch.to(self.agent.device)
@@ -594,8 +722,12 @@ class TD3Trainer:
         
         with torch.no_grad():
             # Target policy smoothing
-            noise = (torch.randn_like(action_batch) * self.noise_sigma).clamp(-self.noise_clip, self.noise_clip)
-            next_action = (self.agent.actor_target(next_state_batch) + noise).clamp(-self.agent.max_action, self.agent.max_action)
+            noise = (torch.randn_like(action_batch) * self.smooth_sigma).clamp(-self.smooth_clip, self.smooth_clip)
+            next_action = self.agent.actor_target(next_state_batch) + noise
+            if self.agent.allow_reverse:
+                next_action = next_action.clamp(-self.agent.max_action, self.agent.max_action)
+            else:
+                next_action = next_action.clamp(0.0, 1.0)
             
             # Compute target Q values
             target_Q1, target_Q2 = self.agent.critic_target(next_state_batch, next_action)
@@ -682,13 +814,24 @@ class TD3Trainer:
         print(f"✓ Checkpoint saved at episode {episode_num} to {ckpt_path}")
     
     def _save_best_model(self, episode_reward: float, episode_num: int):
-        """Save model if it achieves a new best reward."""
-        if episode_reward > self.best_reward:
-            self.best_reward = episode_reward
-            best_path = self.save_dir / "best_model.pt"
-            self.agent.save(best_path)
-            print(f"✓ New best model saved at episode {episode_num} with reward {episode_reward:.2f} to {best_path}")
-            return True
+        """Save model if it achieves a new best reward (or rolling average for multi-map training)."""
+        if self.multi_map_enabled and len(self.recent_rewards) >= self.num_maps:
+            # For multi-map training, use rolling average of last n episodes
+            rolling_avg = sum(self.recent_rewards[-self.num_maps:]) / self.num_maps
+            if rolling_avg > self.best_reward:
+                self.best_reward = rolling_avg
+                best_path = self.save_dir / "best_model.pt"
+                self.agent.save(best_path)
+                print(f"✓ New best model saved at episode {episode_num} with rolling avg reward {rolling_avg:.2f} to {best_path}")
+                return True
+        elif not self.multi_map_enabled:
+            # For single-map training, use individual episode reward
+            if episode_reward > self.best_reward:
+                self.best_reward = episode_reward
+                best_path = self.save_dir / "best_model.pt"
+                self.agent.save(best_path)
+                print(f"✓ New best model saved at episode {episode_num} with reward {episode_reward:.2f} to {best_path}")
+                return True
         return False
     
     def _save_metrics(self):
