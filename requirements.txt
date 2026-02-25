@@ -1,0 +1,10 @@
+numpy
+pygame
+torch
+scipy
+scikit-image
+pyyaml
+matplotlib
+imageio
+opencv-python
+pandas

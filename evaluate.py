@@ -14,6 +14,9 @@ import sys
 import argparse
 import yaml
 import os
+import numpy as np
+import imageio
+from datetime import datetime
 from pathlib import Path
 from simulation.environment import Environment
 from controllers.manual_controller import ManualController
@@ -128,6 +131,12 @@ def parse_args():
     parser.add_argument("--fps", type=int, default=60,
                         help="Physics update frequency (default: 60 Hz)")
     
+    # Recording
+    parser.add_argument("--record", action="store_true",
+                        help="Record the simulation to a GIF")
+    parser.add_argument("--record-frames", type=int, default=500,
+                        help="Maximum frames to record (default: 500)")
+    
     return parser.parse_args()
 
 def main():
@@ -151,6 +160,8 @@ def main():
         print(f"Model: {args.model}")
     if args.seed is not None:
         print(f"Seed: {args.seed}")
+    if args.record:
+        print(f"Recording: ON (Max frames: {args.record_frames})")
     print("-" * 40)
     
     # Always initialize pygame (needed for event handling and toggling)
@@ -188,6 +199,9 @@ def main():
     clock = pygame.time.Clock() if render_enabled else None
     running = True
     current_map = args.map
+    
+    frames = []
+    recorded_frames = 0
     
     while running:
         # Calculate dt and fps
@@ -265,10 +279,32 @@ def main():
                 env.screen.blit(fps_text, (10, 10))
             
             pygame.display.flip()
+            
+            # Record frame if enabled
+            if args.record and hasattr(env, 'screen'):
+                if recorded_frames < args.record_frames:
+                    # Capture the pygame surface array
+                    view = pygame.surfarray.array3d(env.screen)
+                    # Swap axes from (width, height, channels) to (height, width, channels)
+                    view = view.transpose([1, 0, 2])
+                    frames.append(view)
+                    recorded_frames += 1
+                    if recorded_frames == args.record_frames:
+                        print(f"\nRecording finished reached max frames ({args.record_frames}).")
     
     # Cleanup
     if render_enabled:
         pygame.quit()
+        
+    if args.record and len(frames) > 0:
+        print(f"Saving recording ({len(frames)} frames)...")
+        os.makedirs("assets/recordings", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = f"assets/recordings/sim_{args.controller}_{timestamp}.gif"
+        # Save GIF at approx 30 fps
+        imageio.mimsave(out_path, frames, fps=30)
+        print(f"✓ Saved recording to: {out_path}")
+        
     sys.exit()
 
 if __name__ == "__main__":

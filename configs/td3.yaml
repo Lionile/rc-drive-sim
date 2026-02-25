@@ -25,7 +25,7 @@ epsilon_end: 0   # Final epsilon value (reached at max episodes)
 # Environment settings
 map: [6, 7]
 physics_fps: 50  # Physics simulation frequency (Hz) - affects dt calculations
-allow_reverse: false  # Allow neural network to output negative signals (backwards wheel signals)
+allow_reverse: true  # Allow neural network to output negative signals (backwards wheel signals)
 
 # Network architecture (hidden layer sizes)
 actor_hidden_sizes: [128, 128]   # e.g., [32, 32] means input -> 32 -> 32 -> output

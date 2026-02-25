@@ -176,6 +176,10 @@ class TD3Agent:
         # Load allow_reverse setting (default to True for backward compatibility)
         self.allow_reverse = checkpoint.get('allow_reverse', True)
         
+        # Propagate to neural networks
+        self.actor.allow_reverse = self.allow_reverse
+        self.actor_target.allow_reverse = self.allow_reverse
+        
         self.actor.load_state_dict(checkpoint['actor_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
         self.actor_optimizer.load_state_dict(checkpoint['actor_optimizer_state_dict'])
@@ -250,7 +254,12 @@ class TD3Controller(BaseController):
         max_action = checkpoint.get('max_action', 1.0)
         actor_hidden_sizes = checkpoint.get('actor_hidden_sizes', [64, 64])
         critic_hidden_sizes = checkpoint.get('critic_hidden_sizes', [400, 300])
-        allow_reverse = checkpoint.get('allow_reverse', True)  # Default to True for backward compatibility
+        # Priotize config setting over checkpoint metadata if provided
+        if self.config and 'allow_reverse' in self.config:
+            allow_reverse = self.config['allow_reverse']
+            print(f"✓ Using config allow_reverse: {allow_reverse}")
+        else:
+            allow_reverse = checkpoint.get('allow_reverse', True)  # Default to True for backward compatibility
         
         # Create agent with correct dimensions
         self.agent = TD3Agent(state_dim=state_dim, action_dim=action_dim, max_action=max_action,

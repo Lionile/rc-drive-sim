@@ -717,7 +717,7 @@ class Environment:
             # Reverse the centerline but keep the start point first
             reversed_centerline = np.flip(centerline, axis=0)
             # Rotate so start point is first again
-            start_pos = np.where(np.allclose(reversed_centerline, proj_pt, atol=1e-6))[0]
+            start_pos = np.where(np.all(np.isclose(reversed_centerline, proj_pt, atol=1e-6), axis=1))[0]
             if len(start_pos) > 0:
                 start_pos = start_pos[0]
                 reversed_centerline = np.roll(reversed_centerline, -start_pos, axis=0)
