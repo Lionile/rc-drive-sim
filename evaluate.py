@@ -3,10 +3,10 @@ RC Car Simulation Runner
 Run with different controllers via command line arguments.
 
 Usage:
-    python run.py --controller manual --map 5
-    python run.py --controller random --map 1 --render
-    python run.py --controller ppo --model path/to/model.zip --map 3
-    python run.py --controller td3 --model path/to/model.zip --no-render
+    python evaluate.py --controller manual --map 5
+    python evaluate.py --controller random --map 1 --render
+    python evaluate.py --controller ppo --model path/to/model.zip --map 3
+    python evaluate.py --controller td3 --model path/to/model.zip --no-render
 """
 
 import pygame
@@ -76,8 +76,8 @@ def create_controller(controller_type, model_path=None, seed=None):
 
 def build_env(map_index: int) -> Environment:
     """Build environment with specified map."""
-    start_map = f"maps/map_start{map_index}.png"
-    display_map = f"maps/map{map_index}.png"
+    start_map = f"assets/maps/map_start{map_index}.png"
+    display_map = f"assets/maps/map{map_index}.png"
     return Environment(
         map_path=start_map,
         display_map_path=display_map,

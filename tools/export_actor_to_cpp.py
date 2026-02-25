@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Export trained TD3 actor weights to C++ header format for ESP32 deployment.
-Usage: python export_actor_to_cpp.py --model models/td3/your_model/best_model.pt
+Usage: python export_actor_to_cpp.py --model checkpoints/td3/your_model/best_model.pt
 """
 
 import argparse

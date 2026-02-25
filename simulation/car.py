@@ -47,7 +47,7 @@ class DifferentialDriveCar:
     def load_sprite(self):
         """Load and scale the car sprite."""
         try:
-            self.original_sprite = pygame.image.load("sprite_images/Player.png").convert_alpha()
+            self.original_sprite = pygame.image.load("assets/sprite_images/Player.png").convert_alpha()
             # Scale sprite to match car dimensions. Assume the sprite faces to the right by default,
             # so X dimension = car length, Y dimension = car width (track_width).
             self.original_sprite = pygame.transform.scale(

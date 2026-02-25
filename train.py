@@ -37,7 +37,7 @@ def build_env(map_config, render=False):
     # Handle both single map ID and list of map IDs
     if isinstance(map_config, list):
         # Multiple maps - create environment with all maps
-        map_paths = [f"maps/map_start{map_id}.png" for map_id in map_config]
+        map_paths = [f"assets/maps/map_start{map_id}.png" for map_id in map_config]
         env = Environment(
             map_path=map_paths,  # Pass list of map paths
             show_collision_box=render,
@@ -48,7 +48,7 @@ def build_env(map_config, render=False):
         )
     else:
         # Single map - backwards compatibility
-        map_path = f"maps/map_start{map_config}.png"
+        map_path = f"assets/maps/map_start{map_config}.png"
         env = Environment(
             map_path=map_path,  # Pass single map path
             show_collision_box=render,
@@ -65,7 +65,7 @@ def main():
     parser.add_argument("--config", required=True, help="Path to config file")
     parser.add_argument("--episodes", type=int, help="Number of episodes to train")
     parser.add_argument("--total-steps", type=int, help="Total steps to train")
-    parser.add_argument("--save-dir", default="models", help="Directory to save models")
+    parser.add_argument("--save-dir", default="checkpoints", help="Directory to save checkpoints")
     parser.add_argument("--render", action="store_true", help="Render environment during training")
     parser.add_argument("--seed", type=int, help="Random seed (overrides config)")
     

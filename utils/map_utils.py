@@ -589,7 +589,7 @@ def visualize_track_lines(image_path):
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python map_utils.py <image_path>")
-        print("Example: python map_utils.py maps/map_start3.png")
+        print("Example: python map_utils.py assets/maps/map_start3.png")
         sys.exit(1)
 
     image_path = sys.argv[1]
